@@ -1,0 +1,17 @@
+{
+  "name": "RAMPS CUBE CRM",
+  "short_name": "RC CRM",
+  "description": "Lightweight CRM for RAMPS CUBE commercial refrigeration operations.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F8FAFC",
+  "theme_color": "#2563EB",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

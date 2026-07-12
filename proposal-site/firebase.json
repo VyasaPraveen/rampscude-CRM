@@ -1,0 +1,7 @@
+{
+  "hosting": {
+    "site": "ramps-cube-crm-proposal",
+    "public": ".",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
+  }
+}
