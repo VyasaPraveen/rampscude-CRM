@@ -2,8 +2,10 @@ import type {
   AttendanceRecord,
   AttendanceStatus,
   Customer,
-  Enquiry,
-  EnquiryStatus,
+  Invoice,
+  Lead,
+  LeadSource,
+  LeadStatus,
   Order,
   OrderStatus,
   Payment,
@@ -15,6 +17,8 @@ import type {
   ServiceStatus,
   User
 } from "@/types/crm";
+import { productLabel } from "@/types/crm";
+import { CUSTOMER_SOURCE_TYPES, PRODUCT_TYPES } from "@/lib/options";
 
 const companies = [
   "Sri Balaji Foods",
@@ -64,60 +68,86 @@ const names = [
 
 const cities = ["Tirupati", "Chittoor", "Nellore", "Kadapa", "Anantapur", "Vijayawada", "Kurnool"];
 
+const brands = ["Blue Star", "Voltas", "Western", "Haier", "Godrej", "Elanpro", "Rockwell", "Frigoglass"];
+
+const models = [
+  "Visi Cooler 500L",
+  "Deep Freezer 300L",
+  "Vertical Freezer 400L",
+  "Back Bar Chiller 320L",
+  "Under Counter 240L",
+  "Cold Room Panel",
+  "Blast Freezer 200L",
+  "Display Counter 1.8m",
+  "Water Cooler 80L",
+  "Milk Chiller 500L"
+];
+
+const vendors = ["Blue Star Distributor", "Voltas Depot", "Regional Wholesaler", "Direct OEM"];
+
 export const customers: Customer[] = companies.map((companyName, index) => ({
   customerId: `CUST-${String(index + 1).padStart(3, "0")}`,
   customerName: names[index],
-  companyName,
   mobile: `9${830000000 + index * 37921}`,
   whatsapp: `9${840000000 + index * 41817}`,
+  city: cities[index % cities.length],
+  address: `${24 + index}, Main Market Road`,
+  productBrand: brands[index % brands.length],
+  productModel: models[index % models.length],
+  productType: PRODUCT_TYPES[index % PRODUCT_TYPES.length],
+  sourceType: CUSTOMER_SOURCE_TYPES[index % CUSTOMER_SOURCE_TYPES.length],
+  companyName,
   email: `${companyName.toLowerCase().replaceAll(" ", ".")}@example.com`,
   gst: `37AABCR${1200 + index}Z${(index % 9) + 1}`,
-  address: `${24 + index}, Main Market Road`,
-  city: cities[index % cities.length],
   customerType: index % 3 === 0 ? "Dealer" : index % 3 === 1 ? "Business" : "Retail",
   remarks: index % 2 === 0 ? "Prefers WhatsApp updates and quick delivery." : "Requires GST quotation before approval.",
   createdAt: `2026-0${(index % 6) + 1}-${String((index % 24) + 1).padStart(2, "0")}`
 }));
 
-const productNames = [
-  "Vertical Freezer",
-  "Visi Cooler",
-  "Deep Freezer",
-  "Back Bar Chiller",
-  "Under Counter Chiller",
-  "Cold Room Panel",
-  "Blast Freezer",
-  "Display Counter",
-  "Water Cooler",
-  "Milk Chiller"
-];
-
 export const products: Product[] = Array.from({ length: 30 }, (_, index) => {
-  const name = productNames[index % productNames.length];
+  const brand = brands[index % brands.length];
+  const model = models[index % models.length];
+  const price = 42000 + index * 8500;
+  const nlc = Math.round(price * 0.82);
+  // Every 3rd unit is marked sold, so the stock report shows both in-stock and sold-out rows.
+  const sold = index % 3 === 0;
   return {
     productId: `PROD-${String(index + 1).padStart(3, "0")}`,
-    productName: `${name} ${index % 2 === 0 ? "Premium" : "Economy"}`,
-    category: ["Commercial Freezer", "Retail Cooling", "Kitchen Refrigeration", "Cold Storage"][index % 4],
-    modelNumber: `RC-${name.split(" ").map((part) => part[0]).join("")}-${300 + index * 15}`,
-    price: 42000 + index * 8500,
-    warranty: index % 3 === 0 ? "24 months" : "12 months",
-    description: `Energy efficient ${name.toLowerCase()} for commercial refrigeration use.`,
-    image: "/icons/icon.svg",
+    brand,
+    model,
+    serialNo: `SN-2026-${String(1001 + index)}`,
+    price,
+    purchaseFrom: vendors[index % vendors.length],
+    invoiceName: `RC/PUR/2026/${String(index + 1).padStart(3, "0")}`,
+    invoiceDate: `2026-0${(index % 6) + 1}-${String((index % 25) + 1).padStart(2, "0")}`,
+    productType: PRODUCT_TYPES[index % PRODUCT_TYPES.length],
+    nlc,
+    saleDate: sold ? `2026-07-${String((index % 25) + 1).padStart(2, "0")}` : undefined,
+    soldToName: sold ? names[index % names.length] : undefined,
+    soldToTown: sold ? cities[index % cities.length] : undefined,
+    commission: sold ? 1500 + (index % 5) * 500 : undefined,
     createdAt: `2026-0${(index % 6) + 1}-${String((index % 25) + 1).padStart(2, "0")}`
   };
 });
 
-const enquiryStatuses: EnquiryStatus[] = ["New", "Follow-up", "Quotation Sent", "Order Confirmed", "Closed"];
-export const enquiries: Enquiry[] = Array.from({ length: 25 }, (_, index) => ({
-  enquiryId: `ENQ-${String(index + 1).padStart(3, "0")}`,
-  enquiryNumber: `RC-ENQ-2026-${String(index + 1).padStart(3, "0")}`,
-  customerId: customers[index % customers.length].customerId,
-  product: products[index % products.length].productName,
-  source: ["Phone", "Walk-in", "WhatsApp", "Website", "Referral"][index % 5] as Enquiry["source"],
-  assignedTo: ["Admin", "Priya", "Rahul", "Kiran"][index % 4],
-  followupDate: `2026-07-${String((index % 20) + 2).padStart(2, "0")}`,
-  remarks: index % 2 === 0 ? "Asked for dealer pricing." : "Needs installation support.",
-  status: enquiryStatuses[index % enquiryStatuses.length],
+const leadSources: LeadSource[] = ["Walk-in", "Online", "Social Media", "Phone", "Referral"];
+const leadStatuses: LeadStatus[] = ["New", "Follow-up", "Quotation Sent", "Order Confirmed", "Closed"];
+export const leads: Lead[] = Array.from({ length: 25 }, (_, index) => ({
+  leadId: `LEAD-${String(index + 1).padStart(3, "0")}`,
+  leadNumber: `RC-LEAD-2026-${String(index + 1).padStart(3, "0")}`,
+  name: names[index % names.length],
+  town: cities[index % cities.length],
+  phone: `9${812000000 + index * 51237}`,
+  source: leadSources[index % leadSources.length],
+  interestedIn: `${brands[index % brands.length]} ${models[index % models.length]}`,
+  description: index % 2 === 0 ? "Asked for dealer pricing and installation support." : "Comparing models, needs a quotation by this week.",
+  status: leadStatuses[index % leadStatuses.length],
+  address: `${12 + index}, Bazaar Street`,
+  email: index % 2 === 0 ? `${names[index % names.length].toLowerCase().replace(/[^a-z]/g, "")}@example.com` : "",
+  productBrand: brands[index % brands.length],
+  productModel: models[index % models.length],
+  productType: PRODUCT_TYPES[index % PRODUCT_TYPES.length],
+  sourceType: CUSTOMER_SOURCE_TYPES[index % CUSTOMER_SOURCE_TYPES.length],
   createdAt: `2026-06-${String((index % 25) + 1).padStart(2, "0")}`
 }));
 
@@ -155,12 +185,30 @@ export const orders: Order[] = Array.from({ length: 10 }, (_, index) => ({
   createdAt: `2026-06-${String((index % 20) + 6).padStart(2, "0")}`
 }));
 
+const invoiceSources: Invoice["source"][] = ["Tally", "Tally", "Manual"];
+export const invoices: Invoice[] = Array.from({ length: 12 }, (_, index) => {
+  const customer = customers[index % customers.length];
+  const amount = quotations[index % quotations.length].total;
+  return {
+    invoiceId: `INV-${String(index + 1).padStart(3, "0")}`,
+    invoiceNumber: `RC/INV/2026/${String(index + 1).padStart(3, "0")}`,
+    customerName: customer.companyName || customer.customerName,
+    town: customer.city,
+    date: `2026-07-${String((index % 20) + 2).padStart(2, "0")}`,
+    amount,
+    source: invoiceSources[index % invoiceSources.length],
+    created: true,
+    shared: index % 3 !== 0,
+    createdAt: `2026-07-${String((index % 20) + 2).padStart(2, "0")}`
+  };
+});
+
 const serviceStatuses: ServiceStatus[] = ["Pending", "In Progress", "Completed"];
 export const services: ServiceRequest[] = Array.from({ length: 12 }, (_, index) => ({
   serviceId: `SRV-${String(index + 1).padStart(3, "0")}`,
   serviceNumber: `RC-SRV-2026-${String(index + 1).padStart(3, "0")}`,
   customerId: customers[index % customers.length].customerId,
-  product: products[(index + 4) % products.length].productName,
+  product: productLabel(products[(index + 4) % products.length]),
   complaint: ["Temperature fluctuation", "Compressor noise", "Door gasket leakage", "Regular maintenance"][index % 4],
   assignedTo: ["Suresh", "Kiran", "Mahesh"][index % 3],
   serviceDate: `2026-07-${String((index % 22) + 3).padStart(2, "0")}`,

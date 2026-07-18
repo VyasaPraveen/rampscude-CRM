@@ -9,7 +9,13 @@ export const STORAGE_KEYS = {
   customers: "rc_customers",
   quotations: "rc_quotations",
   users: "rc_users",
-  attendance: "rc_attendance"
+  attendance: "rc_attendance",
+  inventory: "rc_inventory",
+  leads: "rc_leads",
+  invoices: "rc_invoices",
+  orders: "rc_orders",
+  services: "rc_services",
+  payments: "rc_payments"
 } as const;
 
 export function loadState<T>(key: string, fallback: T): T {

@@ -1,4 +1,5 @@
 import type { Customer, Product, Quotation } from "@/types/crm";
+import { productLabel } from "@/types/crm";
 import { shortDate } from "@/utils/format";
 
 /** Company profile used on generated documents. */
@@ -17,7 +18,8 @@ function inr(value: number): string {
 }
 
 function productName(products: Product[], productId: string): string {
-  return products.find((item) => item.productId === productId)?.productName ?? productId;
+  const product = products.find((item) => item.productId === productId);
+  return product ? productLabel(product) : productId;
 }
 
 /** Build a wa.me deep link with a pre-filled message. Strips non-digits from the number. */
@@ -34,7 +36,7 @@ export function quotationMessage(quotation: Quotation, customer: Customer | unde
   );
   return [
     `*${COMPANY.name}* — Quotation ${quotation.quotationNumber}`,
-    customer ? `To: ${customer.companyName}` : "",
+    customer ? `To: ${customer.companyName || customer.customerName}` : "",
     "",
     ...lines,
     "",
@@ -88,10 +90,14 @@ export async function downloadQuotationPdf(quotation: Quotation, customer: Custo
   doc.setFontSize(10);
   y += 16;
   if (customer) {
-    doc.text(customer.companyName, marginX, y);
-    doc.text(`${customer.customerName}`, marginX, (y += 14));
-    doc.text(`${customer.address}, ${customer.city}`, marginX, (y += 14));
-    doc.text(`GST: ${customer.gst}  |  ${customer.mobile}`, marginX, (y += 14));
+    const heading = customer.companyName || customer.customerName;
+    doc.text(heading, marginX, y);
+    if (customer.companyName && customer.customerName && customer.companyName !== customer.customerName) {
+      doc.text(`${customer.customerName}`, marginX, (y += 14));
+    }
+    const locationLine = [customer.address, customer.city].filter(Boolean).join(", ");
+    if (locationLine) doc.text(locationLine, marginX, (y += 14));
+    doc.text(`${customer.gst ? `GST: ${customer.gst}  |  ` : ""}${customer.mobile}`, marginX, (y += 14));
   } else {
     doc.text("—", marginX, y);
   }

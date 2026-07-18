@@ -18,7 +18,9 @@ import {
   Menu,
   MessageCircle,
   Pencil,
+  Phone,
   Plus,
+  ReceiptText,
   Search,
   Settings,
   ShieldCheck,
@@ -36,35 +38,46 @@ import { z } from "zod";
 import { useServiceWorker } from "@/hooks/use-service-worker";
 import {
   customers as customerSeed,
-  enquiries,
   generateAttendance,
-  orders,
-  payments,
-  products,
+  invoices as invoiceSeed,
+  leads as leadSeed,
+  orders as orderSeed,
+  payments as paymentSeed,
+  products as productSeed,
   quotations as quotationSeed,
-  services,
+  services as serviceSeed,
   users as userSeed
 } from "@/lib/seed-data";
-import type { AttendanceRecord, Customer, CustomerType, Product, Quotation, User } from "@/types/crm";
+import type { AttendanceRecord, Customer, Invoice, Lead, Order, Payment, Product, Quotation, ServiceRequest, User } from "@/types/crm";
 import { cn } from "@/lib/utils";
-import { currency, shortDate } from "@/utils/format";
+import { CUSTOMER_SOURCE_TYPES, PRODUCT_TYPES, uniqueSorted } from "@/lib/options";
+import { currency } from "@/utils/format";
 import { formatRemaining, getDemoStatus, type DemoStatus } from "@/lib/demo";
 import { DemoBanner, DemoExpiredScreen } from "@/components/demo-gate";
-import { Badge, Chart, DataTable, Panel, SimpleRows } from "@/components/ui";
+import { Badge, Chart, DataTable, DeleteButton, Panel, SimpleRows } from "@/components/ui";
 import { QuotationModal } from "@/components/quotation-modal";
 import { UsersView } from "@/components/users-view";
 import { AttendanceView } from "@/components/attendance-view";
+import { InventoryView } from "@/components/inventory-view";
+import { LeadsView } from "@/components/leads-view";
+import { InvoicesView } from "@/components/invoices-view";
+import { OrdersView } from "@/components/orders-view";
+import { ServicesView } from "@/components/services-view";
+import { PaymentsView } from "@/components/payments-view";
+import { SearchView } from "@/components/search-view";
 import { useToast } from "@/components/toast";
 import { STORAGE_KEYS, loadState, saveState } from "@/lib/storage";
 import { downloadCSV, downloadQuotationPdf, quotationMessage, whatsappLink } from "@/lib/export";
 
 type ModuleId =
   | "dashboard"
+  | "search"
   | "customers"
-  | "enquiries"
-  | "products"
+  | "leads"
+  | "inventory"
   | "quotations"
   | "orders"
+  | "invoices"
   | "services"
   | "attendance"
   | "payments"
@@ -76,11 +89,13 @@ type ModuleDef = { readonly id: ModuleId; readonly label: string; readonly icon:
 
 const modules: readonly ModuleDef[] = [
   { id: "dashboard", label: "Dashboard", icon: Home },
+  { id: "search", label: "Search", icon: Search },
   { id: "customers", label: "Customers", icon: Users },
-  { id: "enquiries", label: "Enquiries", icon: ClipboardList },
-  { id: "products", label: "Products", icon: Boxes },
+  { id: "leads", label: "Leads", icon: ClipboardList },
+  { id: "inventory", label: "Inventory", icon: Boxes },
   { id: "quotations", label: "Quotations", icon: FileText },
   { id: "orders", label: "Orders", icon: BriefcaseBusiness },
+  { id: "invoices", label: "Invoices", icon: ReceiptText },
   { id: "services", label: "Services", icon: Wrench },
   { id: "attendance", label: "Attendance", icon: CalendarCheck },
   { id: "payments", label: "Payments", icon: CreditCard },
@@ -94,17 +109,17 @@ const loginSchema = z.object({
   password: z.string().min(6, "Use at least 6 characters")
 });
 
+// Only Name and Phone are mandatory; every other customer field is optional.
 const customerSchema = z.object({
-  customerName: z.string().min(2, "Customer name is required"),
-  companyName: z.string().min(2, "Company name is required"),
-  mobile: z.string().min(10, "Mobile number is required"),
-  whatsapp: z.string().min(10, "WhatsApp number is required"),
-  email: z.string().email("Enter a valid email"),
-  gst: z.string().min(8, "GST number is required"),
-  address: z.string().min(4, "Address is required"),
-  city: z.string().min(2, "City is required"),
-  customerType: z.enum(["Dealer", "Business", "Retail"]),
-  remarks: z.string().optional()
+  customerName: z.string().min(2, "Name is required"),
+  mobile: z.string().min(10, "A valid phone number is required"),
+  city: z.string().optional(),
+  address: z.string().optional(),
+  productModel: z.string().optional(),
+  productBrand: z.string().optional(),
+  productType: z.string().optional(),
+  email: z.string().email("Enter a valid email").optional().or(z.literal("")),
+  sourceType: z.string().optional()
 });
 
 type CustomerForm = z.infer<typeof customerSchema>;
@@ -120,9 +135,15 @@ export default function Page() {
   const [globalSearch, setGlobalSearch] = useState("");
   const [customerList, setCustomerList] = useState<Customer[]>(customerSeed);
   const [quotationList, setQuotationList] = useState<Quotation[]>(quotationSeed);
+  const [inventory, setInventory] = useState<Product[]>(productSeed);
+  const [leadList, setLeadList] = useState<Lead[]>(leadSeed);
+  const [invoiceList, setInvoiceList] = useState<Invoice[]>(invoiceSeed);
+  const [orderList, setOrderList] = useState<Order[]>(orderSeed);
+  const [serviceList, setServiceList] = useState<ServiceRequest[]>(serviceSeed);
+  const [paymentList, setPaymentList] = useState<Payment[]>(paymentSeed);
   const [userList, setUserList] = useState<User[]>(userSeed);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
-  const [showCustomerForm, setShowCustomerForm] = useState(false);
+  const [editingCustomer, setEditingCustomer] = useState<Customer | null | "new">(null);
   const [editingQuotation, setEditingQuotation] = useState<Quotation | null | "new">(null);
 
   const isAdmin = currentUser?.role === "Admin";
@@ -134,6 +155,12 @@ export default function Page() {
     setDemo(getDemoStatus());
     setCustomerList(loadState(STORAGE_KEYS.customers, customerSeed));
     setQuotationList(loadState(STORAGE_KEYS.quotations, quotationSeed));
+    setInventory(loadState(STORAGE_KEYS.inventory, productSeed));
+    setLeadList(loadState(STORAGE_KEYS.leads, leadSeed));
+    setInvoiceList(loadState(STORAGE_KEYS.invoices, invoiceSeed));
+    setOrderList(loadState(STORAGE_KEYS.orders, orderSeed));
+    setServiceList(loadState(STORAGE_KEYS.services, serviceSeed));
+    setPaymentList(loadState(STORAGE_KEYS.payments, paymentSeed));
 
     const users = loadState(STORAGE_KEYS.users, userSeed);
     setUserList(users);
@@ -176,25 +203,102 @@ export default function Page() {
     setActiveModule("dashboard");
   }
 
-  function addCustomer(customer: Customer) {
-    setCustomerList((current) => {
-      const next = [customer, ...current];
-      saveState(STORAGE_KEYS.customers, next);
-      return next;
-    });
-    setShowCustomerForm(false);
-    toast(`${customer.companyName} added`);
+  function saveCustomer(customer: Customer) {
+    const existed = customerList.some((item) => item.customerId === customer.customerId);
+    const next = existed ? customerList.map((item) => (item.customerId === customer.customerId ? customer : item)) : [customer, ...customerList];
+    setCustomerList(next);
+    saveState(STORAGE_KEYS.customers, next);
+    setEditingCustomer(null);
+    toast(existed ? `${customer.customerName} updated` : `${customer.customerName} added`);
+  }
+
+  function deleteCustomer(customer: Customer) {
+    const next = customerList.filter((item) => item.customerId !== customer.customerId);
+    setCustomerList(next);
+    saveState(STORAGE_KEYS.customers, next);
+    toast(`${customer.customerName} removed`, "info");
+  }
+
+  function updateInventory(next: Product[]) {
+    setInventory(next);
+    saveState(STORAGE_KEYS.inventory, next);
+  }
+
+  function updateLeads(next: Lead[]) {
+    setLeadList(next);
+    saveState(STORAGE_KEYS.leads, next);
+  }
+
+  // Convert a lead into a customer, carrying over all shared fields. If a customer with the
+  // same phone already exists it is linked instead of duplicated. The lead is then marked converted.
+  function convertLead(lead: Lead) {
+    if (lead.convertedCustomerId) {
+      toast(`${lead.name} is already a customer`, "info");
+      return;
+    }
+    const leadPhone = lead.phone.replace(/\D/g, "");
+    const existing = leadPhone ? customerList.find((c) => c.mobile.replace(/\D/g, "") === leadPhone) : undefined;
+    const customer: Customer =
+      existing ?? {
+        customerId: `CUST-${Date.now()}`,
+        customerName: lead.name,
+        mobile: lead.phone,
+        city: lead.town ?? "",
+        address: lead.address ?? "",
+        productModel: lead.productModel ?? "",
+        productBrand: lead.productBrand ?? "",
+        productType: lead.productType,
+        email: lead.email ?? "",
+        sourceType: lead.sourceType,
+        createdAt: new Date().toISOString()
+      };
+    if (!existing) {
+      const nextCustomers = [customer, ...customerList];
+      setCustomerList(nextCustomers);
+      saveState(STORAGE_KEYS.customers, nextCustomers);
+    }
+    const nextLeads = leadList.map((item) =>
+      item.leadId === lead.leadId ? { ...item, convertedCustomerId: customer.customerId, status: "Order Confirmed" as Lead["status"] } : item
+    );
+    setLeadList(nextLeads);
+    saveState(STORAGE_KEYS.leads, nextLeads);
+    toast(existing ? `${lead.name} linked to existing customer` : `${lead.name} converted to customer`);
+  }
+
+  function updateInvoices(next: Invoice[]) {
+    setInvoiceList(next);
+    saveState(STORAGE_KEYS.invoices, next);
+  }
+
+  function updateOrders(next: Order[]) {
+    setOrderList(next);
+    saveState(STORAGE_KEYS.orders, next);
+  }
+
+  function updateServices(next: ServiceRequest[]) {
+    setServiceList(next);
+    saveState(STORAGE_KEYS.services, next);
+  }
+
+  function updatePayments(next: Payment[]) {
+    setPaymentList(next);
+    saveState(STORAGE_KEYS.payments, next);
   }
 
   function saveQuotation(quotation: Quotation) {
     const existed = quotationList.some((item) => item.quotationId === quotation.quotationId);
-    setQuotationList((current) => {
-      const next = existed ? current.map((item) => (item.quotationId === quotation.quotationId ? quotation : item)) : [quotation, ...current];
-      saveState(STORAGE_KEYS.quotations, next);
-      return next;
-    });
+    const next = existed ? quotationList.map((item) => (item.quotationId === quotation.quotationId ? quotation : item)) : [quotation, ...quotationList];
+    setQuotationList(next);
+    saveState(STORAGE_KEYS.quotations, next);
     setEditingQuotation(null);
     toast(existed ? `${quotation.quotationNumber} updated` : `${quotation.quotationNumber} created`);
+  }
+
+  function deleteQuotation(quotation: Quotation) {
+    const next = quotationList.filter((item) => item.quotationId !== quotation.quotationId);
+    setQuotationList(next);
+    saveState(STORAGE_KEYS.quotations, next);
+    toast(`${quotation.quotationNumber} removed`, "info");
   }
 
   function updateUsers(next: User[]) {
@@ -330,7 +434,7 @@ export default function Page() {
               </button>
               <button
                 className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white shadow-soft"
-                onClick={() => setShowCustomerForm(true)}
+                onClick={() => setEditingCustomer("new")}
               >
                 <Plus className="h-4 w-4" />
                 Add Customer
@@ -340,39 +444,42 @@ export default function Page() {
         </header>
 
         <section className="p-4 lg:p-8">
-          {activeModule === "dashboard" && <Dashboard customers={customerList} quotations={quotationList} />}
-          {activeModule === "customers" && <CustomersView customers={customerList} query={globalSearch} />}
-          {activeModule === "enquiries" && <EnquiriesView query={globalSearch} />}
-          {activeModule === "products" && <ProductsView query={globalSearch} />}
+          {activeModule === "dashboard" && <Dashboard customers={customerList} quotations={quotationList} leads={leadList} invoices={invoiceList} payments={paymentList} services={serviceList} />}
+          {activeModule === "search" && <SearchView customers={customerList} products={inventory} leads={leadList} />}
+          {activeModule === "customers" && <CustomersView customers={customerList} query={globalSearch} onEdit={(customer) => setEditingCustomer(customer)} onDelete={deleteCustomer} />}
+          {activeModule === "leads" && <LeadsView leads={leadList} products={inventory} query={globalSearch} onChange={updateLeads} onConvert={convertLead} />}
+          {activeModule === "inventory" && <InventoryView products={inventory} query={globalSearch} onChange={updateInventory} />}
           {activeModule === "quotations" && (
             <QuotationsView
               quotations={quotationList}
               customers={customerList}
-              products={products}
+              products={inventory}
               query={globalSearch}
               onEdit={(quotation) => setEditingQuotation(quotation)}
               onNew={() => setEditingQuotation("new")}
+              onDelete={deleteQuotation}
             />
           )}
-          {activeModule === "orders" && <OrdersView query={globalSearch} />}
-          {activeModule === "services" && <ServicesView query={globalSearch} />}
+          {activeModule === "orders" && <OrdersView orders={orderList} customers={customerList} query={globalSearch} onChange={updateOrders} />}
+          {activeModule === "invoices" && <InvoicesView invoices={invoiceList} query={globalSearch} onChange={updateInvoices} />}
+          {activeModule === "services" && <ServicesView services={serviceList} customers={customerList} query={globalSearch} onChange={updateServices} />}
           {activeModule === "attendance" && <AttendanceView users={userList} records={attendance} onChange={updateAttendance} />}
-          {activeModule === "payments" && <PaymentsView query={globalSearch} />}
+          {activeModule === "payments" && <PaymentsView payments={paymentList} customers={customerList} query={globalSearch} onChange={updatePayments} />}
           {activeModule === "users" && isAdmin && <UsersView users={userList} currentUserId={currentUser.id} onChange={updateUsers} />}
-          {activeModule === "reports" && <ReportsView customers={customerList} quotations={quotationList} />}
+          {activeModule === "reports" && <ReportsView customers={customerList} products={inventory} quotations={quotationList} leads={leadList} invoices={invoiceList} orders={orderList} payments={paymentList} services={serviceList} />}
           {activeModule === "settings" && <SettingsView users={userList} />}
         </section>
       </div>
 
-      {showCustomerForm && (
-        <CustomerModal onClose={() => setShowCustomerForm(false)} onCreate={addCustomer} />
+      {editingCustomer !== null && (
+        <CustomerModal initial={editingCustomer === "new" ? null : editingCustomer} products={inventory} onClose={() => setEditingCustomer(null)} onSave={saveCustomer} />
       )}
 
       {editingQuotation !== null && (
         <QuotationModal
           quotation={editingQuotation === "new" ? null : editingQuotation}
           customers={customerList}
-          products={products}
+          products={inventory}
           existing={quotationList}
           onClose={() => setEditingQuotation(null)}
           onSave={saveQuotation}
@@ -458,17 +565,23 @@ function LoginScreen({ demo, onLogin }: { demo: DemoStatus; onLogin: (values: z.
   );
 }
 
-function Dashboard({ customers, quotations }: { customers: Customer[]; quotations: Quotation[] }) {
-  const nameOf = (customerId: string) => customers.find((item) => item.customerId === customerId)?.companyName ?? customerName(customerId);
-  const customersByMonth = [0, 1, 2, 3, 4, 5].map((month) => customers.filter((item) => new Date(item.createdAt).getMonth() === month).length);
+function Dashboard({ customers, quotations, leads, invoices, payments, services }: { customers: Customer[]; quotations: Quotation[]; leads: Lead[]; invoices: Invoice[]; payments: Payment[]; services: ServiceRequest[] }) {
+  const nameOf = (customerId: string) => {
+    const c = customers.find((item) => item.customerId === customerId);
+    return c ? c.companyName || c.customerName : customerName(customerId);
+  };
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const monthsToShow = new Date().getMonth() + 1; // Jan through the current month
+  const customerMonthLabels = monthNames.slice(0, monthsToShow);
+  const customersByMonth = customerMonthLabels.map((_, month) => customers.filter((item) => new Date(item.createdAt).getMonth() === month).length);
   const quotationStatusLabels = ["Draft", "Sent", "Accepted", "Rejected"];
   const quotationsByStatus = quotationStatusLabels.map((status) => quotations.filter((item) => item.status === status).length);
   const stats = [
     { label: "Total Customers", value: customers.length, icon: Users },
-    { label: "New Enquiries", value: enquiries.filter((item) => item.status === "New").length, icon: ClipboardList },
-    { label: "Pending Follow-ups", value: enquiries.filter((item) => item.status === "Follow-up").length, icon: CalendarClock },
+    { label: "New Leads", value: leads.filter((item) => item.status === "New").length, icon: ClipboardList },
+    { label: "Pending Follow-ups", value: leads.filter((item) => item.status === "Follow-up").length, icon: CalendarClock },
     { label: "Quotations Sent", value: quotations.filter((item) => item.status === "Sent").length, icon: FileText },
-    { label: "Orders Received", value: orders.length, icon: BriefcaseBusiness },
+    { label: "Invoices Pending Share", value: invoices.filter((item) => !item.shared).length, icon: ReceiptText },
     { label: "Pending Payments", value: payments.filter((item) => item.status !== "Paid").length, icon: CreditCard },
     { label: "Open Service Requests", value: services.filter((item) => item.status !== "Completed").length, icon: Wrench }
   ];
@@ -495,71 +608,78 @@ function Dashboard({ customers, quotations }: { customers: Customer[]; quotation
       </div>
 
       <div className="grid gap-6 xl:grid-cols-2">
-        <Chart title="New Customers (Monthly)" values={customersByMonth} />
+        <Chart title="New Customers (Monthly)" values={customersByMonth} labels={customerMonthLabels} />
         <Chart title="Quotations by Status" values={quotationsByStatus} labels={quotationStatusLabels} />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-2">
         <Panel title="Latest Customers">
-          <SimpleRows rows={customers.slice(0, 5).map((item) => [item.companyName, item.city, item.customerType])} />
+          <SimpleRows rows={customers.slice(0, 5).map((item) => [item.customerName, item.city || "—", item.mobile])} />
         </Panel>
-        <Panel title="Upcoming Follow-ups">
-          <SimpleRows rows={enquiries.slice(0, 5).map((item) => [customerName(item.customerId), item.product, shortDate(item.followupDate)])} />
+        <Panel title="Recent Leads">
+          <SimpleRows rows={leads.slice(0, 5).map((item) => [item.name, item.town || "—", item.interestedIn || item.source])} />
         </Panel>
         <Panel title="Recent Quotations">
           <SimpleRows rows={quotations.slice(0, 5).map((item) => [item.quotationNumber, nameOf(item.customerId), currency(item.total)])} />
         </Panel>
-        <Panel title="Recent Services">
-          <SimpleRows rows={services.slice(0, 5).map((item) => [item.serviceNumber, item.complaint, item.status])} />
+        <Panel title="Recent Invoices">
+          <SimpleRows rows={invoices.slice(0, 5).map((item) => [item.invoiceNumber, item.customerName, item.shared ? "Shared" : "Pending"])} />
         </Panel>
       </div>
     </div>
   );
 }
 
-function CustomersView({ customers, query }: { customers: Customer[]; query: string }) {
-  const [type, setType] = useState<CustomerType | "All">("All");
+function CustomersView({ customers, query, onEdit, onDelete }: { customers: Customer[]; query: string; onEdit: (customer: Customer) => void; onDelete: (customer: Customer) => void }) {
   const rows = customers.filter((customer) => {
-    const haystack = `${customer.customerName} ${customer.companyName} ${customer.mobile} ${customer.city}`.toLowerCase();
-    return haystack.includes(query.toLowerCase()) && (type === "All" || customer.customerType === type);
+    const haystack = `${customer.customerName} ${customer.companyName ?? ""} ${customer.mobile} ${customer.city} ${customer.productBrand} ${customer.productModel} ${customer.productType ?? ""}`.toLowerCase();
+    return haystack.includes(query.toLowerCase());
   });
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap gap-2">
-        {(["All", "Dealer", "Business", "Retail"] as const).map((item) => (
-          <button
-            key={item}
-            onClick={() => setType(item)}
-            className={cn("rounded-lg border px-4 py-2 text-sm font-semibold", type === item ? "border-blue-600 bg-blue-600 text-white" : "border-slate-200 bg-white text-slate-700")}
-          >
-            {item}
-          </button>
-        ))}
-      </div>
+      <p className="text-sm text-slate-500">{customers.length} customers</p>
       <DataTable
-        columns={["Customer", "Company", "Mobile", "City", "Type", "Created"]}
-        rows={rows.map((item) => [
-          item.customerName,
-          item.companyName,
-          item.mobile,
-          item.city,
-          <Badge key={item.customerId} label={item.customerType} />,
-          shortDate(item.createdAt)
-        ])}
+        columns={["Name", "Phone", "Town", "Product Type", "Brand", "Model", "Contact", "Actions"]}
+        rows={rows.map((item) => {
+          const phone = item.mobile.replace(/\D/g, "");
+          const waNumber = (item.whatsapp || item.mobile).replace(/\D/g, "");
+          return [
+            <span key="n" className="font-semibold text-slate-900">{item.customerName}</span>,
+            item.mobile || "—",
+            item.city || "—",
+            item.productType || "—",
+            item.productBrand || "—",
+            item.productModel || "—",
+            <div key="contact" className="flex items-center gap-2">
+              <a
+                href={`tel:${phone}`}
+                className={cn("inline-flex items-center gap-1 rounded-lg border border-blue-200 px-2.5 py-1.5 text-xs font-semibold text-blue-700 hover:border-blue-300", !phone && "pointer-events-none opacity-40")}
+                title="Call"
+              >
+                <Phone className="h-3.5 w-3.5" /> Call
+              </a>
+              <a
+                href={waNumber ? whatsappLink(waNumber, `Hello ${item.customerName}, `) : undefined}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={cn("inline-flex items-center gap-1 rounded-lg border border-green-200 px-2.5 py-1.5 text-xs font-semibold text-green-700 hover:border-green-300", !waNumber && "pointer-events-none opacity-40")}
+                title="WhatsApp"
+              >
+                <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
+              </a>
+            </div>,
+            <div key="actions" className="flex items-center gap-2">
+              <button onClick={() => onEdit(item)} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-blue-700 hover:border-blue-300">
+                <Pencil className="h-3.5 w-3.5" /> Edit
+              </button>
+              <DeleteButton resetKey={item.customerId} onDelete={() => onDelete(item)} />
+            </div>
+          ];
+        })}
       />
     </div>
   );
-}
-
-function EnquiriesView({ query }: { query: string }) {
-  const rows = enquiries.filter((item) => `${item.enquiryNumber} ${customerName(item.customerId)} ${item.product}`.toLowerCase().includes(query.toLowerCase()));
-  return <DataTable columns={["Enquiry", "Customer", "Product", "Source", "Follow-up", "Status"]} rows={rows.map((item) => [item.enquiryNumber, customerName(item.customerId), item.product, item.source, shortDate(item.followupDate), <Badge key={item.enquiryId} label={item.status} />])} />;
-}
-
-function ProductsView({ query }: { query: string }) {
-  const rows = products.filter((item) => `${item.productName} ${item.category} ${item.modelNumber}`.toLowerCase().includes(query.toLowerCase()));
-  return <DataTable columns={["Product", "Category", "Model", "Price", "Warranty"]} rows={rows.map((item) => [item.productName, item.category, item.modelNumber, currency(item.price), item.warranty])} />;
 }
 
 function QuotationsView({
@@ -568,7 +688,8 @@ function QuotationsView({
   products,
   query,
   onEdit,
-  onNew
+  onNew,
+  onDelete
 }: {
   quotations: Quotation[];
   customers: Customer[];
@@ -576,11 +697,15 @@ function QuotationsView({
   query: string;
   onEdit: (quotation: Quotation) => void;
   onNew: () => void;
+  onDelete: (quotation: Quotation) => void;
 }) {
   const toast = useToast();
   const customerOf = (customerId: string) => customers.find((item) => item.customerId === customerId);
-  const nameOf = (customerId: string) => customerOf(customerId)?.companyName ?? customerName(customerId);
-  const rows = quotations.filter((item) => `${item.quotationNumber} ${nameOf(item.customerId)}`.toLowerCase().includes(query.toLowerCase()));
+  const nameOf = (customerId: string) => {
+    const c = customerOf(customerId);
+    return c ? c.companyName || c.customerName : customerName(customerId);
+  };
+  const rows = quotations.filter((item) => `${item.quotationNumber} ${item.reference ?? ""} ${nameOf(item.customerId)}`.toLowerCase().includes(query.toLowerCase()));
 
   async function handlePdf(quotation: Quotation) {
     try {
@@ -603,9 +728,10 @@ function QuotationsView({
         <button onClick={onNew} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white"><Plus className="h-4 w-4" /> New Quotation</button>
       </div>
       <DataTable
-        columns={["Quotation", "Customer", "Subtotal", "GST", "Total", "Status", "Actions"]}
+        columns={["Quotation", "Reference", "Customer", "Subtotal", "GST", "Total", "Status", "Actions"]}
         rows={rows.map((item) => [
           item.quotationNumber,
+          item.reference || "—",
           nameOf(item.customerId),
           currency(item.subtotal),
           currency(item.gst),
@@ -630,6 +756,7 @@ function QuotationsView({
             >
               <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
             </button>
+            <DeleteButton resetKey={item.quotationId} onDelete={() => onDelete(item)} />
           </div>
         ])}
       />
@@ -637,36 +764,56 @@ function QuotationsView({
   );
 }
 
-function OrdersView({ query }: { query: string }) {
-  const rows = orders.filter((item) => `${item.orderNumber} ${customerName(item.customerId)}`.toLowerCase().includes(query.toLowerCase()));
-  return <DataTable columns={["Order", "Customer", "Quotation", "Delivery", "Payment", "Status"]} rows={rows.map((item) => [item.orderNumber, customerName(item.customerId), item.quotationId, shortDate(item.deliveryDate), <Badge key={`${item.orderId}-pay`} label={item.paymentStatus} />, <Badge key={item.orderId} label={item.status} />])} />;
-}
-
-function ServicesView({ query }: { query: string }) {
-  const rows = services.filter((item) => `${item.serviceNumber} ${customerName(item.customerId)} ${item.product}`.toLowerCase().includes(query.toLowerCase()));
-  return <DataTable columns={["Service", "Customer", "Product", "Complaint", "Technician", "Status"]} rows={rows.map((item) => [item.serviceNumber, customerName(item.customerId), item.product, item.complaint, item.assignedTo, <Badge key={item.serviceId} label={item.status} />])} />;
-}
-
-function PaymentsView({ query }: { query: string }) {
-  const rows = payments.filter((item) => `${item.invoiceNumber} ${customerName(item.customerId)}`.toLowerCase().includes(query.toLowerCase()));
-  return <DataTable columns={["Invoice", "Customer", "Amount", "Paid", "Balance", "Status"]} rows={rows.map((item) => [item.invoiceNumber, customerName(item.customerId), currency(item.invoiceAmount), currency(item.paidAmount), currency(item.balanceAmount), <Badge key={item.paymentId} label={item.status} />])} />;
-}
-
-function ReportsView({ customers, quotations }: { customers: Customer[]; quotations: Quotation[] }) {
+function ReportsView({ customers, products, quotations, leads, invoices, orders, payments, services }: { customers: Customer[]; products: Product[]; quotations: Quotation[]; leads: Lead[]; invoices: Invoice[]; orders: Order[]; payments: Payment[]; services: ServiceRequest[] }) {
   const toast = useToast();
-  const nameOf = (customerId: string) => customers.find((item) => item.customerId === customerId)?.companyName ?? customerName(customerId);
+  const nameOf = (customerId: string) => {
+    const c = customers.find((item) => item.customerId === customerId);
+    return c ? c.companyName || c.customerName : customerName(customerId);
+  };
   const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
   const reports: { title: string; description: string; build: () => (string | number)[][] }[] = [
     {
       title: "Customer Report",
-      description: "All customers with contact and GST details.",
-      build: () => [["Company", "Contact", "Mobile", "City", "Type", "GST"], ...customers.map((c) => [c.companyName, c.customerName, c.mobile, c.city, c.customerType, c.gst])]
+      description: "All customers with contact, product and customer-type details.",
+      build: () => [
+        ["Name", "Phone", "Town", "Address", "Product Type", "Brand", "Model", "Type of Customer", "Mail"],
+        ...customers.map((c) => [c.customerName, c.mobile, c.city, c.address, c.productType ?? "", c.productBrand, c.productModel, c.sourceType ?? "", c.email])
+      ]
     },
     {
-      title: "Enquiry Report",
-      description: "Enquiries with source, follow-up and status.",
-      build: () => [["Enquiry", "Customer", "Product", "Source", "Follow-up", "Status"], ...enquiries.map((e) => [e.enquiryNumber, nameOf(e.customerId), e.product, e.source, e.followupDate, e.status])]
+      title: "Stock Report",
+      description: "Inventory with purchase, NLC, sale price and sold-out details.",
+      build: () => [
+        ["Brand", "Model", "Serial No", "Product Type", "Purchase Date", "NLC", "Sale Price", "Sale Date", "Customer Town", "Customer Name", "Commission", "Status"],
+        ...products.map((p) => [
+          p.brand,
+          p.model,
+          p.serialNo,
+          p.productType ?? "",
+          p.invoiceDate,
+          typeof p.nlc === "number" ? p.nlc : "",
+          p.price,
+          p.saleDate ?? "",
+          p.soldToTown ?? "",
+          p.soldToName ?? "",
+          typeof p.commission === "number" ? p.commission : "",
+          p.saleDate ? "Sold" : "In Stock"
+        ])
+      ]
+    },
+    {
+      title: "Leads Report",
+      description: "Leads with contact, product, source, interest and status.",
+      build: () => [
+        ["Lead", "Name", "Town", "Phone", "Mail", "Product Type", "Brand", "Model", "Type of Customer", "Nature", "Interested In", "Status", "Converted"],
+        ...leads.map((l) => [l.leadNumber, l.name, l.town, l.phone, l.email ?? "", l.productType ?? "", l.productBrand ?? "", l.productModel ?? "", l.sourceType ?? "", l.source, l.interestedIn, l.status, l.convertedCustomerId ? "Yes" : "No"])
+      ]
+    },
+    {
+      title: "Invoice Report",
+      description: "Invoices with source and Created / Shared state.",
+      build: () => [["Invoice", "Customer", "Town", "Date", "Amount", "Source", "Created", "Shared"], ...invoices.map((i) => [i.invoiceNumber, i.customerName, i.town, i.date, i.amount, i.source, i.created ? "Yes" : "No", i.shared ? "Yes" : "No"])]
     },
     {
       title: "Quotation Report",
@@ -748,60 +895,121 @@ function SettingsView({ users }: { users: User[] }) {
   );
 }
 
-function CustomerModal({ onClose, onCreate }: { onClose: () => void; onCreate: (customer: Customer) => void }) {
+function CustomerModal({ initial, products, onClose, onSave }: { initial: Customer | null; products: Product[]; onClose: () => void; onSave: (customer: Customer) => void }) {
   const {
     register,
     handleSubmit,
     formState: { errors }
   } = useForm<CustomerForm>({
     resolver: zodResolver(customerSchema),
-    defaultValues: { customerType: "Business" }
+    defaultValues: initial
+      ? {
+          customerName: initial.customerName,
+          mobile: initial.mobile,
+          city: initial.city,
+          address: initial.address,
+          productBrand: initial.productBrand,
+          productModel: initial.productModel,
+          productType: initial.productType ?? "",
+          email: initial.email,
+          sourceType: initial.sourceType ?? ""
+        }
+      : undefined
   });
 
+  // Brand / model dropdowns are built from the inventory; the current record's own value
+  // is merged in so editing an item whose brand/model is no longer in stock still shows it.
+  const brandOptions = uniqueSorted([...products.map((p) => p.brand), initial?.productBrand]);
+  const modelOptions = uniqueSorted([...products.map((p) => p.model), initial?.productModel]);
+
   function submit(values: CustomerForm) {
-    onCreate({
-      customerId: `CUST-${Date.now()}`,
-      createdAt: new Date().toISOString(),
-      remarks: values.remarks ?? "",
-      ...values
+    onSave({
+      customerId: initial?.customerId ?? `CUST-${Date.now()}`,
+      createdAt: initial?.createdAt ?? new Date().toISOString(),
+      whatsapp: initial?.whatsapp,
+      companyName: initial?.companyName,
+      gst: initial?.gst,
+      customerType: initial?.customerType,
+      remarks: initial?.remarks,
+      customerName: values.customerName,
+      mobile: values.mobile,
+      city: values.city ?? "",
+      address: values.address ?? "",
+      productModel: values.productModel ?? "",
+      productBrand: values.productBrand ?? "",
+      productType: (values.productType || undefined) as Customer["productType"],
+      email: values.email ?? "",
+      sourceType: (values.sourceType || undefined) as Customer["sourceType"]
     });
   }
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4">
       <form onSubmit={handleSubmit(submit)} className="max-h-[92vh] w-full max-w-3xl overflow-auto rounded-lg bg-white p-6 shadow-2xl">
-        <div className="mb-6 flex items-center justify-between">
-          <h2 className="text-xl font-bold">Add Customer</h2>
-          <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 p-2"><X className="h-5 w-5" /></button>
+        <div className="mb-2 flex items-center justify-between">
+          <h2 className="text-xl font-bold">{initial ? "Edit Customer" : "Add Customer"}</h2>
+          <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 p-2" aria-label="Close"><X className="h-5 w-5" /></button>
         </div>
+        <p className="mb-6 text-sm text-slate-500">Only Name and Phone are required.</p>
         <div className="grid gap-4 md:grid-cols-2">
-          {([
-            ["customerName", "Customer Name"],
-            ["companyName", "Company Name"],
-            ["mobile", "Mobile Number"],
-            ["whatsapp", "WhatsApp Number"],
-            ["email", "Email"],
-            ["gst", "GST Number"],
-            ["address", "Address"],
-            ["city", "City"]
-          ] as const).map(([name, label]) => (
-            <label key={name} className="text-sm font-semibold text-slate-700">
-              {label}
-              <input className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register(name)} />
-              {errors[name] && <span className="mt-1 block text-xs text-red-600">{errors[name]?.message}</span>}
-            </label>
-          ))}
           <label className="text-sm font-semibold text-slate-700">
-            Customer Type
-            <select className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("customerType")}>
-              <option>Dealer</option>
-              <option>Business</option>
-              <option>Retail</option>
+            Name *
+            <input className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("customerName")} />
+            {errors.customerName && <span className="mt-1 block text-xs text-red-600">{errors.customerName.message}</span>}
+          </label>
+          <label className="text-sm font-semibold text-slate-700">
+            Phone Number *
+            <input className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("mobile")} />
+            {errors.mobile && <span className="mt-1 block text-xs text-red-600">{errors.mobile.message}</span>}
+          </label>
+          <label className="text-sm font-semibold text-slate-700">
+            Town
+            <input className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("city")} />
+          </label>
+          <label className="text-sm font-semibold text-slate-700">
+            Address
+            <input className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("address")} />
+          </label>
+          <label className="text-sm font-semibold text-slate-700">
+            Product Brand
+            <select className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("productBrand")}>
+              <option value="">— Select —</option>
+              {brandOptions.map((brand) => (
+                <option key={brand} value={brand}>{brand}</option>
+              ))}
             </select>
           </label>
           <label className="text-sm font-semibold text-slate-700">
-            Remarks
-            <input className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("remarks")} />
+            Product Model
+            <select className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("productModel")}>
+              <option value="">— Select —</option>
+              {modelOptions.map((model) => (
+                <option key={model} value={model}>{model}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm font-semibold text-slate-700">
+            Product Type
+            <select className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("productType")}>
+              <option value="">— Select —</option>
+              {PRODUCT_TYPES.map((type) => (
+                <option key={type} value={type}>{type}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm font-semibold text-slate-700">
+            Mail ID
+            <input className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("email")} />
+            {errors.email && <span className="mt-1 block text-xs text-red-600">{errors.email.message}</span>}
+          </label>
+          <label className="text-sm font-semibold text-slate-700">
+            Type of Customer
+            <select className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("sourceType")}>
+              <option value="">— Select —</option>
+              {CUSTOMER_SOURCE_TYPES.map((type) => (
+                <option key={type} value={type}>{type}</option>
+              ))}
+            </select>
           </label>
         </div>
         <div className="mt-6 flex justify-end gap-3">
@@ -815,5 +1023,5 @@ function CustomerModal({ onClose, onCreate }: { onClose: () => void; onCreate: (
 
 function customerName(customerId: string) {
   const customer = customerSeed.find((item) => item.customerId === customerId);
-  return customer ? customer.companyName : customerId;
+  return customer?.companyName || customer?.customerName || customerId;
 }

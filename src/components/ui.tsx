@@ -1,7 +1,47 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { Trash2 } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+
+/** Delete button with a two-step inline confirm (arms on first click, auto-disarms after 3s). */
+export function DeleteButton({ onDelete, disabled, title, resetKey }: { readonly onDelete: () => void; readonly disabled?: boolean; readonly title?: string; readonly resetKey?: string | number }) {
+  const [armed, setArmed] = useState(false);
+
+  // Disarm if the underlying row changes (e.g. list re-filtered while armed), so a
+  // confirm can never delete a different record than the one the user armed.
+  useEffect(() => {
+    setArmed(false);
+  }, [resetKey]);
+
+  useEffect(() => {
+    if (!armed) return;
+    const timer = setTimeout(() => setArmed(false), 3000);
+    return () => clearTimeout(timer);
+  }, [armed]);
+
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      title={title}
+      onClick={() => {
+        if (armed) {
+          onDelete();
+          setArmed(false);
+        } else {
+          setArmed(true);
+        }
+      }}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition disabled:opacity-40",
+        armed ? "border-red-300 bg-red-50 text-red-700" : "border-slate-200 text-slate-500 hover:border-red-300 hover:text-red-600"
+      )}
+    >
+      <Trash2 className="h-3.5 w-3.5" /> {armed ? "Confirm?" : "Delete"}
+    </button>
+  );
+}
 
 /** Shared status → pill styling used across every module. */
 export const statusTone: Record<string, string> = {
@@ -36,7 +76,13 @@ export const statusTone: Record<string, string> = {
   Absent: "bg-red-50 text-red-700 ring-red-200",
   "Half Day": "bg-yellow-50 text-yellow-700 ring-yellow-200",
   Leave: "bg-orange-50 text-orange-700 ring-orange-200",
-  "Week Off": "bg-slate-100 text-slate-500 ring-slate-200"
+  "Week Off": "bg-slate-100 text-slate-500 ring-slate-200",
+  // Invoice source
+  Tally: "bg-indigo-50 text-indigo-700 ring-indigo-200",
+  Manual: "bg-slate-100 text-slate-600 ring-slate-200",
+  // Stock
+  Sold: "bg-green-50 text-green-700 ring-green-200",
+  "In Stock": "bg-blue-50 text-blue-700 ring-blue-200"
 };
 
 export function Badge({ label }: { readonly label: string }) {
@@ -103,8 +149,8 @@ export function SimpleRows({ rows }: { readonly rows: string[][] }) {
     <div className="divide-y divide-slate-100">
       {rows.map((row, index) => (
         <div key={index} className="grid gap-2 py-3 text-sm sm:grid-cols-3">
-          {row.map((cell) => (
-            <span key={cell} className="text-slate-700">
+          {row.map((cell, cellIndex) => (
+            <span key={cellIndex} className="text-slate-700">
               {cell}
             </span>
           ))}

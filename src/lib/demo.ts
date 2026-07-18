@@ -71,14 +71,13 @@ function firstLaunch(now: Date): Date {
  */
 export function getDemoStatus(now: Date = new Date()): DemoStatus {
   const startedAt = firstLaunch(now);
-  const rollingDeadline = new Date(startedAt.getTime() + DEMO_DURATION_DAYS * DAY_MS);
   const hardDeadline = configuredDeadline();
 
-  // Effective expiry = whichever guard trips first.
-  const expiresAt =
-    hardDeadline && hardDeadline.getTime() < rollingDeadline.getTime()
-      ? hardDeadline
-      : rollingDeadline;
+  // A configured absolute deadline is authoritative so every client keeps access
+  // until that date regardless of when they first opened the app. The rolling
+  // {@link DEMO_DURATION_DAYS}-day window only applies as a fallback when no
+  // hard deadline is set in the build.
+  const expiresAt = hardDeadline ?? new Date(startedAt.getTime() + DEMO_DURATION_DAYS * DAY_MS);
 
   const remainingMs = Math.max(0, expiresAt.getTime() - now.getTime());
   const expired = remainingMs <= 0;

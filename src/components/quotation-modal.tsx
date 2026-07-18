@@ -3,6 +3,7 @@
 import { Plus, Save, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { Customer, Product, Quotation, QuotationStatus } from "@/types/crm";
+import { productLabel } from "@/types/crm";
 import { currency } from "@/utils/format";
 
 const STATUSES: QuotationStatus[] = ["Draft", "Sent", "Accepted", "Rejected"];
@@ -36,6 +37,7 @@ export function QuotationModal({
 }) {
   const isEdit = Boolean(quotation);
   const [customerId, setCustomerId] = useState(quotation?.customerId ?? customers[0]?.customerId ?? "");
+  const [reference, setReference] = useState(quotation?.reference ?? "");
   const [status, setStatus] = useState<QuotationStatus>(quotation?.status ?? "Draft");
   const [discount, setDiscount] = useState<number>(quotation?.discount ?? 0);
   const [items, setItems] = useState<LineItem[]>(
@@ -83,6 +85,7 @@ export function QuotationModal({
     onSave({
       quotationId: quotation?.quotationId ?? `QUO-${Date.now()}`,
       quotationNumber: quotation?.quotationNumber ?? nextQuotationNumber(existing),
+      reference: reference.trim() || undefined,
       customerId,
       products: items,
       subtotal,
@@ -117,7 +120,7 @@ export function QuotationModal({
             >
               {customers.map((customer) => (
                 <option key={customer.customerId} value={customer.customerId}>
-                  {customer.companyName}
+                  {customer.companyName || customer.customerName}
                 </option>
               ))}
             </select>
@@ -133,6 +136,15 @@ export function QuotationModal({
                 <option key={option}>{option}</option>
               ))}
             </select>
+          </label>
+          <label className="text-sm font-semibold text-slate-700 md:col-span-3">
+            Quotation Reference No.
+            <input
+              value={reference}
+              onChange={(event) => setReference(event.target.value)}
+              placeholder="e.g. PO number, enquiry ref or Tally voucher"
+              className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2"
+            />
           </label>
         </div>
 
@@ -155,7 +167,7 @@ export function QuotationModal({
                   >
                     {products.map((product) => (
                       <option key={product.productId} value={product.productId}>
-                        {product.productName}
+                        {productLabel(product)}
                       </option>
                     ))}
                   </select>
