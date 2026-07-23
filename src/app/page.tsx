@@ -2,43 +2,38 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
-  Bell,
   Boxes,
   BriefcaseBusiness,
   CalendarCheck,
-  CalendarClock,
   ChevronRight,
   ClipboardList,
   CreditCard,
-  Download,
   FileBarChart,
   FileText,
   Home,
   LogOut,
   Menu,
-  MessageCircle,
-  Pencil,
-  Phone,
   Plus,
   ReceiptText,
   Search,
   Settings,
+  Tag,
   ShieldCheck,
   Snowflake,
   UserCog,
-  UserPlus,
   Users,
   Wrench,
   X
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { useServiceWorker } from "@/hooks/use-service-worker";
 import {
+  brands as brandSeed,
+  companySettings as settingsSeed,
   customers as customerSeed,
-  generateAttendance,
   invoices as invoiceSeed,
   leads as leadSeed,
   orders as orderSeed,
@@ -48,26 +43,32 @@ import {
   services as serviceSeed,
   users as userSeed
 } from "@/lib/seed-data";
-import type { AttendanceRecord, Customer, Invoice, Lead, Order, Payment, Product, Quotation, ServiceRequest, User } from "@/types/crm";
+import type { AttendanceRecord, Brand, CompanySettings, Customer, Invoice, Lead, Order, Payment, Product, Quotation, ServiceRequest, User } from "@/types/crm";
 import { cn } from "@/lib/utils";
-import { CUSTOMER_SOURCE_TYPES, PRODUCT_TYPES, uniqueSorted } from "@/lib/options";
-import { currency } from "@/utils/format";
+import { computeTotals, rateForProduct } from "@/lib/gst";
 import { formatRemaining, getDemoStatus, type DemoStatus } from "@/lib/demo";
 import { DemoBanner, DemoExpiredScreen } from "@/components/demo-gate";
-import { Badge, Chart, DataTable, DeleteButton, Panel, SimpleRows } from "@/components/ui";
 import { QuotationModal } from "@/components/quotation-modal";
 import { UsersView } from "@/components/users-view";
 import { AttendanceView } from "@/components/attendance-view";
 import { InventoryView } from "@/components/inventory-view";
+import { BrandsView } from "@/components/brands-view";
+import { SettingsView } from "@/components/settings-view";
 import { LeadsView } from "@/components/leads-view";
 import { InvoicesView } from "@/components/invoices-view";
 import { OrdersView } from "@/components/orders-view";
 import { ServicesView } from "@/components/services-view";
 import { PaymentsView } from "@/components/payments-view";
 import { SearchView } from "@/components/search-view";
+import { Dashboard } from "@/components/dashboard-view";
+import { CustomersView } from "@/components/customers-view";
+import { QuotationsView } from "@/components/quotations-view";
+import { ReportsView } from "@/components/reports-view";
+import { CustomerModal } from "@/components/customer-modal";
 import { useToast } from "@/components/toast";
-import { STORAGE_KEYS, loadState, saveState } from "@/lib/storage";
-import { downloadCSV, downloadQuotationPdf, quotationMessage, whatsappLink } from "@/lib/export";
+import { STORAGE_KEYS, ensureDataVersion, loadState, saveState } from "@/lib/storage";
+import { upgradeStoredPasswords, verifyPassword } from "@/lib/password";
+import { onSyncStatus, persist, pushDoc, subscribeWorkspace, type SyncStatus } from "@/lib/sync";
 
 type ModuleId =
   | "dashboard"
@@ -75,6 +76,7 @@ type ModuleId =
   | "customers"
   | "leads"
   | "inventory"
+  | "brands"
   | "quotations"
   | "orders"
   | "invoices"
@@ -93,6 +95,7 @@ const modules: readonly ModuleDef[] = [
   { id: "customers", label: "Customers", icon: Users },
   { id: "leads", label: "Leads", icon: ClipboardList },
   { id: "inventory", label: "Inventory", icon: Boxes },
+  { id: "brands", label: "Brands", icon: Tag, adminOnly: true },
   { id: "quotations", label: "Quotations", icon: FileText },
   { id: "orders", label: "Orders", icon: BriefcaseBusiness },
   { id: "invoices", label: "Invoices", icon: ReceiptText },
@@ -104,30 +107,62 @@ const modules: readonly ModuleDef[] = [
   { id: "settings", label: "Settings", icon: Settings }
 ];
 
+/** How each sync state is presented in the header. */
+const SYNC_LABELS: Record<SyncStatus, { label: string; hint: string; tone: string; dot: string }> = {
+  live: {
+    label: "Synced",
+    hint: "Data is shared live across every device signed into this workspace.",
+    tone: "border-green-200 bg-green-50 text-green-700",
+    dot: "bg-green-500"
+  },
+  connecting: {
+    label: "Connecting…",
+    hint: "Contacting the sync service.",
+    tone: "border-amber-200 bg-amber-50 text-amber-700",
+    dot: "animate-pulse bg-amber-500"
+  },
+  error: {
+    label: "Not synced",
+    hint: "Cloud sync is unavailable — changes are saved on this device only.",
+    tone: "border-red-200 bg-red-50 text-red-700",
+    dot: "bg-red-500"
+  },
+  disabled: {
+    label: "Offline",
+    hint: "Cloud sync is not configured — changes are saved on this device only.",
+    tone: "border-slate-200 bg-white text-slate-500",
+    dot: "bg-slate-400"
+  }
+};
+
+/** Enquiry types that warrant an automatic draft quotation. */
+const QUOTABLE_ENQUIRIES: Lead["source"][] = ["Product Enquiry", "Price Enquiry", "Dummy Quotation"];
+
 const loginSchema = z.object({
   email: z.string().email("Enter a valid email"),
   password: z.string().min(6, "Use at least 6 characters")
 });
 
-// Only Name and Phone are mandatory; every other customer field is optional.
-const customerSchema = z.object({
-  customerName: z.string().min(2, "Name is required"),
-  mobile: z.string().min(10, "A valid phone number is required"),
-  city: z.string().optional(),
-  address: z.string().optional(),
-  productModel: z.string().optional(),
-  productBrand: z.string().optional(),
-  productType: z.string().optional(),
-  email: z.string().email("Enter a valid email").optional().or(z.literal("")),
-  sourceType: z.string().optional()
-});
-
-type CustomerForm = z.infer<typeof customerSchema>;
+/** Next display sequence from a list of numbered strings — uses the max trailing number,
+ *  so deleting a record never reuses an existing human-facing number. */
+function nextNumber(existing: string[]): number {
+  return (
+    existing.reduce((max, value) => {
+      const match = /(\d+)\s*$/.exec(value);
+      return match ? Math.max(max, Number(match[1])) : max;
+    }, 0) + 1
+  );
+}
 
 export default function Page() {
   useServiceWorker();
   const toast = useToast();
   const [mounted, setMounted] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>("connecting");
+  const latest = useRef<Record<string, unknown>>({});
+  const currentUserRef = useRef<User | null>(null);
+  // Kept in a ref so the mount-only effect never needs `toast` as a dependency.
+  const toastRef = useRef(toast);
   const [demo, setDemo] = useState<DemoStatus | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [activeModule, setActiveModule] = useState<ModuleId>("dashboard");
@@ -142,27 +177,90 @@ export default function Page() {
   const [serviceList, setServiceList] = useState<ServiceRequest[]>(serviceSeed);
   const [paymentList, setPaymentList] = useState<Payment[]>(paymentSeed);
   const [userList, setUserList] = useState<User[]>(userSeed);
+  const [brandList, setBrandList] = useState<Brand[]>(brandSeed);
+  const [settings, setSettings] = useState<CompanySettings>(settingsSeed);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
+  // Tracks leads currently being converted, to make convert idempotent against double-clicks.
+  const convertingRef = useRef<Set<string>>(new Set());
   const [editingCustomer, setEditingCustomer] = useState<Customer | null | "new">(null);
   const [editingQuotation, setEditingQuotation] = useState<Quotation | null | "new">(null);
 
   const isAdmin = currentUser?.role === "Admin";
 
+  /** Save a module: local cache now, cloud in the background, and tell the user if either fails. */
+  function store<T>(key: string, value: T): boolean {
+    const { local, cloud } = persist(key, value);
+    if (!local) toast("Could not save on this device — browser storage is full.", "info");
+    void cloud.then((result) => {
+      if (result === "too-large") {
+        toast("This module is too large to sync. Archive or export old records.", "info");
+      } else if (result === "failed") {
+        toast("Saved on this device, but not synced to the cloud.", "info");
+      }
+    });
+    return local;
+  }
+
+  // Mirror the latest lists into a ref so remote snapshots can be compared against
+  // what this device currently holds without reading stale closure state.
+  useEffect(() => {
+    latest.current = {
+      [STORAGE_KEYS.customers]: customerList,
+      [STORAGE_KEYS.quotations]: quotationList,
+      [STORAGE_KEYS.inventory]: inventory,
+      [STORAGE_KEYS.leads]: leadList,
+      [STORAGE_KEYS.invoices]: invoiceList,
+      [STORAGE_KEYS.orders]: orderList,
+      [STORAGE_KEYS.services]: serviceList,
+      [STORAGE_KEYS.payments]: paymentList,
+      [STORAGE_KEYS.brands]: brandList,
+      [STORAGE_KEYS.users]: userList,
+      [STORAGE_KEYS.attendance]: attendance,
+      [STORAGE_KEYS.settings]: settings
+    };
+    currentUserRef.current = currentUser;
+    toastRef.current = toast;
+  });
+
+  // Reflect the real connection state rather than assuming success.
+  useEffect(() => onSyncStatus((next) => setSyncStatus(next)), []);
+
   // Time- and storage-dependent state must resolve on the client only, so the
   // static-exported HTML and the first client render stay in sync.
   useEffect(() => {
     setMounted(true);
+    // Discard data stored by an earlier build before reading anything back.
+    ensureDataVersion();
     setDemo(getDemoStatus());
-    setCustomerList(loadState(STORAGE_KEYS.customers, customerSeed));
-    setQuotationList(loadState(STORAGE_KEYS.quotations, quotationSeed));
-    setInventory(loadState(STORAGE_KEYS.inventory, productSeed));
-    setLeadList(loadState(STORAGE_KEYS.leads, leadSeed));
-    setInvoiceList(loadState(STORAGE_KEYS.invoices, invoiceSeed));
-    setOrderList(loadState(STORAGE_KEYS.orders, orderSeed));
-    setServiceList(loadState(STORAGE_KEYS.services, serviceSeed));
-    setPaymentList(loadState(STORAGE_KEYS.payments, paymentSeed));
+    // Local cache first so the UI paints instantly, then Firestore streams the
+    // shared workspace over the top and keeps every device in step.
+    const cached: Record<string, unknown> = {
+      [STORAGE_KEYS.customers]: loadState(STORAGE_KEYS.customers, customerSeed),
+      [STORAGE_KEYS.quotations]: loadState(STORAGE_KEYS.quotations, quotationSeed),
+      [STORAGE_KEYS.inventory]: loadState(STORAGE_KEYS.inventory, productSeed),
+      [STORAGE_KEYS.leads]: loadState(STORAGE_KEYS.leads, leadSeed),
+      [STORAGE_KEYS.invoices]: loadState(STORAGE_KEYS.invoices, invoiceSeed),
+      [STORAGE_KEYS.orders]: loadState(STORAGE_KEYS.orders, orderSeed),
+      [STORAGE_KEYS.services]: loadState(STORAGE_KEYS.services, serviceSeed),
+      [STORAGE_KEYS.payments]: loadState(STORAGE_KEYS.payments, paymentSeed),
+      [STORAGE_KEYS.brands]: loadState(STORAGE_KEYS.brands, brandSeed),
+      [STORAGE_KEYS.users]: loadState(STORAGE_KEYS.users, userSeed),
+      [STORAGE_KEYS.attendance]: loadState<AttendanceRecord[]>(STORAGE_KEYS.attendance, []),
+      [STORAGE_KEYS.settings]: { ...settingsSeed, ...loadState<Partial<CompanySettings>>(STORAGE_KEYS.settings, {}) }
+    };
 
-    const users = loadState(STORAGE_KEYS.users, userSeed);
+    const users = cached[STORAGE_KEYS.users] as User[];
+    setCustomerList(cached[STORAGE_KEYS.customers] as Customer[]);
+    setQuotationList(cached[STORAGE_KEYS.quotations] as Quotation[]);
+    setInventory(cached[STORAGE_KEYS.inventory] as Product[]);
+    setLeadList(cached[STORAGE_KEYS.leads] as Lead[]);
+    setInvoiceList(cached[STORAGE_KEYS.invoices] as Invoice[]);
+    setOrderList(cached[STORAGE_KEYS.orders] as Order[]);
+    setServiceList(cached[STORAGE_KEYS.services] as ServiceRequest[]);
+    setPaymentList(cached[STORAGE_KEYS.payments] as Payment[]);
+    setBrandList(cached[STORAGE_KEYS.brands] as Brand[]);
+    setAttendance(cached[STORAGE_KEYS.attendance] as AttendanceRecord[]);
+    setSettings(cached[STORAGE_KEYS.settings] as CompanySettings);
     setUserList(users);
 
     // Restore the session from the LIVE user record (not the stored snapshot) so a
@@ -172,21 +270,95 @@ export default function Page() {
     setCurrentUser(restored);
     if (session) saveState(STORAGE_KEYS.auth, restored);
 
-    // Seed the current month's attendance on first run so the module is not empty.
-    const staff = users.filter((user) => user.role === "Staff");
-    setAttendance(loadState(STORAGE_KEYS.attendance, generateAttendance(staff, new Date())));
+    // Apply a remote change: update state and refresh the offline cache, but do not
+    // write back to Firestore — that would echo the change straight back out.
+    const applyRemote = (key: string, value: unknown) => {
+      // A remote wipe (empty list) must not destroy data this device still holds —
+      // republish instead. Real deletions arrive as a non-empty list or an explicit save.
+      const current = latest.current[key];
+      if (Array.isArray(value) && value.length === 0 && Array.isArray(current) && current.length > 0) {
+        void pushDoc(key, current);
+        return;
+      }
+      saveState(key, value);
+      switch (key) {
+        case STORAGE_KEYS.customers:
+          setCustomerList(value as Customer[]);
+          break;
+        case STORAGE_KEYS.quotations:
+          setQuotationList(value as Quotation[]);
+          break;
+        case STORAGE_KEYS.inventory:
+          setInventory(value as Product[]);
+          break;
+        case STORAGE_KEYS.leads:
+          setLeadList(value as Lead[]);
+          break;
+        case STORAGE_KEYS.invoices:
+          setInvoiceList(value as Invoice[]);
+          break;
+        case STORAGE_KEYS.orders:
+          setOrderList(value as Order[]);
+          break;
+        case STORAGE_KEYS.services:
+          setServiceList(value as ServiceRequest[]);
+          break;
+        case STORAGE_KEYS.payments:
+          setPaymentList(value as Payment[]);
+          break;
+        case STORAGE_KEYS.brands:
+          setBrandList(value as Brand[]);
+          break;
+        case STORAGE_KEYS.users: {
+          const nextUsers = value as User[];
+          setUserList(nextUsers);
+          // An admin on another device may have deactivated or removed this account.
+          const signedIn = currentUserRef.current;
+          if (signedIn) {
+            const live = nextUsers.find((user) => user.id === signedIn.id && user.status === "Active") ?? null;
+            setCurrentUser(live);
+            saveState(STORAGE_KEYS.auth, live);
+            if (!live) toastRef.current("Your account was changed by an administrator. Please sign in again.", "info");
+          }
+          break;
+        }
+        case STORAGE_KEYS.attendance:
+          setAttendance(value as AttendanceRecord[]);
+          break;
+        case STORAGE_KEYS.settings:
+          setSettings({ ...settingsSeed, ...(value as Partial<CompanySettings>) });
+          break;
+        default:
+          break;
+      }
+    };
+
+    // Replace any plaintext credentials with PBKDF2 hashes, then persist the upgrade.
+    void upgradeStoredPasswords(users).then((upgraded) => {
+      if (upgraded !== users) {
+        setUserList(upgraded);
+        persist(STORAGE_KEYS.users, upgraded);
+      }
+    });
+
+    const unsubscribe = subscribeWorkspace(Object.keys(cached), applyRemote, (key) => {
+      void pushDoc(key, cached[key]); // fresh workspace: publish this device's data
+    });
 
     // Re-check the demo window periodically so an open session locks the moment
     // it lapses, without a manual refresh.
     const timer = setInterval(() => setDemo(getDemoStatus()), 60_000);
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      unsubscribe();
+    };
   }, []);
 
   /** Authenticate against the users list: email must exist, password must match, account must be active. */
-  function handleLogin(values: z.infer<typeof loginSchema>): { ok: boolean; error?: string } {
+  async function handleLogin(values: z.infer<typeof loginSchema>): Promise<{ ok: boolean; error?: string }> {
     const email = values.email.trim().toLowerCase();
     const match = userList.find((user) => user.email.toLowerCase() === email);
-    if (!match || match.password !== values.password) {
+    if (!match || !(await verifyPassword(match, values.password))) {
       return { ok: false, error: "Invalid email or password." };
     }
     if (match.status === "Inactive") {
@@ -207,7 +379,7 @@ export default function Page() {
     const existed = customerList.some((item) => item.customerId === customer.customerId);
     const next = existed ? customerList.map((item) => (item.customerId === customer.customerId ? customer : item)) : [customer, ...customerList];
     setCustomerList(next);
-    saveState(STORAGE_KEYS.customers, next);
+    store(STORAGE_KEYS.customers, next);
     setEditingCustomer(null);
     toast(existed ? `${customer.customerName} updated` : `${customer.customerName} added`);
   }
@@ -215,27 +387,95 @@ export default function Page() {
   function deleteCustomer(customer: Customer) {
     const next = customerList.filter((item) => item.customerId !== customer.customerId);
     setCustomerList(next);
-    saveState(STORAGE_KEYS.customers, next);
+    store(STORAGE_KEYS.customers, next);
     toast(`${customer.customerName} removed`, "info");
   }
 
   function updateInventory(next: Product[]) {
     setInventory(next);
-    saveState(STORAGE_KEYS.inventory, next);
+    store(STORAGE_KEYS.inventory, next);
+  }
+
+  function updateBrands(next: Brand[]) {
+    // A rename must cascade, otherwise stock/customers/leads keep pointing at the old
+    // brand string and the "in use" delete guard silently stops protecting it.
+    const renames = new Map<string, string>();
+    next.forEach((brand) => {
+      const before = brandList.find((item) => item.brandId === brand.brandId);
+      if (before && before.name !== brand.name) renames.set(before.name, brand.name);
+    });
+    if (renames.size) {
+      const remap = (value?: string) => (value && renames.has(value) ? renames.get(value) as string : value);
+      const nextInventory = inventory.map((p) => ({ ...p, brand: remap(p.brand) ?? p.brand }));
+      const nextCustomers = customerList.map((c) => ({ ...c, productBrand: remap(c.productBrand) ?? c.productBrand }));
+      const nextLeads = leadList.map((l) => ({ ...l, productBrand: remap(l.productBrand) }));
+      setInventory(nextInventory);
+      store(STORAGE_KEYS.inventory, nextInventory);
+      setCustomerList(nextCustomers);
+      store(STORAGE_KEYS.customers, nextCustomers);
+      setLeadList(nextLeads);
+      store(STORAGE_KEYS.leads, nextLeads);
+    }
+    setBrandList(next);
+    store(STORAGE_KEYS.brands, next);
+  }
+
+  function updateSettings(next: CompanySettings): boolean {
+    setSettings(next);
+    return store(STORAGE_KEYS.settings, next);
   }
 
   function updateLeads(next: Lead[]) {
     setLeadList(next);
-    saveState(STORAGE_KEYS.leads, next);
+    store(STORAGE_KEYS.leads, next);
+  }
+
+  // When a new lead is created, auto-generate a draft quotation from its interest so
+  // sales can follow up immediately. Matches the lead's brand/model to inventory.
+  function createQuotationFromLead(lead: Lead): Quotation | undefined {
+    // Only enquiries that imply a price get an auto-quotation; a service or resale
+    // enquiry should not produce a product quote.
+    if (!QUOTABLE_ENQUIRIES.includes(lead.source)) return undefined;
+    // Quote only what the lead actually asked about — never an arbitrary stock item.
+    const product =
+      inventory.find((p) => p.brand === lead.productBrand && p.model === lead.productModel) ??
+      inventory.find((p) => p.brand === lead.productBrand && lead.productBrand);
+    if (!product) return undefined; // no matching stock — nothing to quote yet
+    const price = product.price;
+    const gstRate = rateForProduct(product, brandList, settings);
+    const line = { productId: product.productId, quantity: 1, price, gstRate };
+    const { subtotal, gst, total } = computeTotals([line], 0, () => gstRate);
+    const quotation: Quotation = {
+      quotationId: `QUO-${Date.now()}`,
+      quotationNumber: `RC/QTN/2026/${String(nextNumber(quotationList.map((q) => q.quotationNumber))).padStart(3, "0")}`,
+      reference: lead.leadNumber,
+      leadId: lead.leadId,
+      customerLabel: lead.name,
+      customerId: "",
+      products: [line],
+      subtotal,
+      discount: 0,
+      gst,
+      total,
+      status: "Draft",
+      createdAt: new Date().toISOString()
+    };
+    const next = [quotation, ...quotationList];
+    setQuotationList(next);
+    store(STORAGE_KEYS.quotations, next);
+    toast(`Quotation ${quotation.quotationNumber} auto-created for ${lead.name}`);
+    return quotation;
   }
 
   // Convert a lead into a customer, carrying over all shared fields. If a customer with the
-  // same phone already exists it is linked instead of duplicated. The lead is then marked converted.
-  function convertLead(lead: Lead) {
-    if (lead.convertedCustomerId) {
-      toast(`${lead.name} is already a customer`, "info");
+  // same phone already exists it is linked instead of duplicated. The lead's auto-quotation is
+  // re-linked to the customer, an order is opened automatically, and the lead is marked converted.
+  function convertLead(lead: Lead, createdQuotation?: Quotation) {
+    if (lead.convertedCustomerId || convertingRef.current.has(lead.leadId)) {
+      if (lead.convertedCustomerId) toast(`${lead.name} is already a customer`, "info");
       return;
     }
+    convertingRef.current.add(lead.leadId);
     const leadPhone = lead.phone.replace(/\D/g, "");
     const existing = leadPhone ? customerList.find((c) => c.mobile.replace(/\D/g, "") === leadPhone) : undefined;
     const customer: Customer =
@@ -255,41 +495,77 @@ export default function Page() {
     if (!existing) {
       const nextCustomers = [customer, ...customerList];
       setCustomerList(nextCustomers);
-      saveState(STORAGE_KEYS.customers, nextCustomers);
+      store(STORAGE_KEYS.customers, nextCustomers);
     }
-    const nextLeads = leadList.map((item) =>
-      item.leadId === lead.leadId ? { ...item, convertedCustomerId: customer.customerId, status: "Order Confirmed" as Lead["status"] } : item
-    );
+
+    // Re-link the lead's auto-generated quotation to the new customer. A quotation created
+    // earlier in this same event is passed in, since `quotationList` has not re-rendered yet.
+    const leadQuotation = createdQuotation ?? quotationList.find((q) => q.leadId === lead.leadId);
+    if (leadQuotation) {
+      const linked: Quotation = { ...leadQuotation, customerId: customer.customerId, customerLabel: undefined };
+      const inList = quotationList.some((q) => q.quotationId === leadQuotation.quotationId);
+      const nextQuotations = inList
+        ? quotationList.map((q) => (q.quotationId === leadQuotation.quotationId ? linked : q))
+        : [linked, ...quotationList];
+      setQuotationList(nextQuotations);
+      store(STORAGE_KEYS.quotations, nextQuotations);
+    }
+
+    // Open an order only when there is a quotation behind it — an order with no
+    // products or value is noise in the Orders module.
+    let order: Order | undefined;
+    if (leadQuotation) {
+      const deliveryDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      order = {
+        orderId: `ORD-${Date.now()}`,
+        orderNumber: `RC-ORD-2026-${String(nextNumber(orderList.map((o) => o.orderNumber))).padStart(3, "0")}`,
+        quotationId: leadQuotation.quotationId,
+        customerId: customer.customerId,
+        deliveryDate,
+        paymentStatus: "Pending",
+        status: "Processing",
+        createdAt: new Date().toISOString()
+      };
+      const nextOrders = [order, ...orderList];
+      setOrderList(nextOrders);
+      store(STORAGE_KEYS.orders, nextOrders);
+    }
+
+    // Upsert using the passed lead: when convert is triggered by a status change the
+    // edited lead is not in `leadList` yet, and a brand-new lead may not be there at all.
+    const merged: Lead = { ...lead, convertedCustomerId: customer.customerId, status: "Order Confirmed" };
+    const known = leadList.some((item) => item.leadId === lead.leadId);
+    const nextLeads = known ? leadList.map((item) => (item.leadId === lead.leadId ? merged : item)) : [merged, ...leadList];
     setLeadList(nextLeads);
-    saveState(STORAGE_KEYS.leads, nextLeads);
-    toast(existing ? `${lead.name} linked to existing customer` : `${lead.name} converted to customer`);
+    store(STORAGE_KEYS.leads, nextLeads);
+    toast(`${lead.name} ${existing ? "linked to existing customer" : "converted to customer"}${order ? ` · order ${order.orderNumber} created` : ""}`);
   }
 
   function updateInvoices(next: Invoice[]) {
     setInvoiceList(next);
-    saveState(STORAGE_KEYS.invoices, next);
+    store(STORAGE_KEYS.invoices, next);
   }
 
   function updateOrders(next: Order[]) {
     setOrderList(next);
-    saveState(STORAGE_KEYS.orders, next);
+    store(STORAGE_KEYS.orders, next);
   }
 
   function updateServices(next: ServiceRequest[]) {
     setServiceList(next);
-    saveState(STORAGE_KEYS.services, next);
+    store(STORAGE_KEYS.services, next);
   }
 
   function updatePayments(next: Payment[]) {
     setPaymentList(next);
-    saveState(STORAGE_KEYS.payments, next);
+    store(STORAGE_KEYS.payments, next);
   }
 
   function saveQuotation(quotation: Quotation) {
     const existed = quotationList.some((item) => item.quotationId === quotation.quotationId);
     const next = existed ? quotationList.map((item) => (item.quotationId === quotation.quotationId ? quotation : item)) : [quotation, ...quotationList];
     setQuotationList(next);
-    saveState(STORAGE_KEYS.quotations, next);
+    store(STORAGE_KEYS.quotations, next);
     setEditingQuotation(null);
     toast(existed ? `${quotation.quotationNumber} updated` : `${quotation.quotationNumber} created`);
   }
@@ -297,13 +573,13 @@ export default function Page() {
   function deleteQuotation(quotation: Quotation) {
     const next = quotationList.filter((item) => item.quotationId !== quotation.quotationId);
     setQuotationList(next);
-    saveState(STORAGE_KEYS.quotations, next);
+    store(STORAGE_KEYS.quotations, next);
     toast(`${quotation.quotationNumber} removed`, "info");
   }
 
   function updateUsers(next: User[]) {
     setUserList(next);
-    saveState(STORAGE_KEYS.users, next);
+    store(STORAGE_KEYS.users, next);
 
     // Keep the active session in sync when the signed-in user edits their own record.
     if (currentUser) {
@@ -315,7 +591,7 @@ export default function Page() {
 
   function updateAttendance(next: AttendanceRecord[]) {
     setAttendance(next);
-    saveState(STORAGE_KEYS.attendance, next);
+    store(STORAGE_KEYS.attendance, next);
   }
 
   const visibleModules = modules.filter((module) => !module.adminOnly || isAdmin);
@@ -386,7 +662,7 @@ export default function Page() {
             </div>
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold text-white">{currentUser.name}</p>
-              <p className="truncate text-xs text-slate-400">{currentUser.role}</p>
+              <p className="truncate text-xs text-slate-500">{currentUser.role}</p>
             </div>
           </div>
           <button
@@ -425,34 +701,50 @@ export default function Page() {
                   value={globalSearch}
                   onChange={(event) => setGlobalSearch(event.target.value)}
                   className="h-11 w-full rounded-lg border border-slate-200 bg-slate-50 pl-10 pr-3 text-sm outline-none ring-blue-500 transition focus:bg-white focus:ring-2"
-                  placeholder="Global search"
+                  placeholder={`Filter ${selectedModule.label.toLowerCase()}…`}
+                  aria-label={`Filter ${selectedModule.label}`}
                 />
               </div>
-              <button className="inline-flex h-11 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700">
-                <Bell className="h-4 w-4" />
-                7 alerts
-              </button>
-              <button
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white shadow-soft"
-                onClick={() => setEditingCustomer("new")}
+              <span
+                title={SYNC_LABELS[syncStatus].hint}
+                className={cn("inline-flex h-11 items-center justify-center gap-2 rounded-lg border px-4 text-sm font-semibold", SYNC_LABELS[syncStatus].tone)}
               >
-                <Plus className="h-4 w-4" />
-                Add Customer
-              </button>
+                <span className={cn("h-2 w-2 rounded-full", SYNC_LABELS[syncStatus].dot)} />
+                {SYNC_LABELS[syncStatus].label}
+              </span>
+              {activeModule === "customers" && (
+                <button
+                  className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white shadow-soft"
+                  onClick={() => setEditingCustomer("new")}
+                >
+                  <Plus className="h-4 w-4" />
+                  Add Customer
+                </button>
+              )}
             </div>
           </div>
         </header>
 
         <section className="p-4 lg:p-8">
+          {syncStatus === "connecting" && (
+            <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800" role="status">
+              Loading your workspace… showing this device&apos;s saved data until the cloud responds.
+            </p>
+          )}
           {activeModule === "dashboard" && <Dashboard customers={customerList} quotations={quotationList} leads={leadList} invoices={invoiceList} payments={paymentList} services={serviceList} />}
           {activeModule === "search" && <SearchView customers={customerList} products={inventory} leads={leadList} />}
           {activeModule === "customers" && <CustomersView customers={customerList} query={globalSearch} onEdit={(customer) => setEditingCustomer(customer)} onDelete={deleteCustomer} />}
-          {activeModule === "leads" && <LeadsView leads={leadList} products={inventory} query={globalSearch} onChange={updateLeads} onConvert={convertLead} />}
-          {activeModule === "inventory" && <InventoryView products={inventory} query={globalSearch} onChange={updateInventory} />}
+          {activeModule === "leads" && (
+            <LeadsView leads={leadList} products={inventory} brands={brandList} query={globalSearch} onChange={updateLeads} onConvert={convertLead} onCreate={createQuotationFromLead} />
+          )}
+          {activeModule === "inventory" && <InventoryView products={inventory} brands={brandList} settings={settings} query={globalSearch} onChange={updateInventory} />}
+          {activeModule === "brands" && isAdmin && <BrandsView brands={brandList} products={inventory} settings={settings} query={globalSearch} onChange={updateBrands} />}
           {activeModule === "quotations" && (
             <QuotationsView
               quotations={quotationList}
               customers={customerList}
+              leads={leadList}
+              settings={settings}
               products={inventory}
               query={globalSearch}
               onEdit={(quotation) => setEditingQuotation(quotation)}
@@ -466,20 +758,22 @@ export default function Page() {
           {activeModule === "attendance" && <AttendanceView users={userList} records={attendance} onChange={updateAttendance} />}
           {activeModule === "payments" && <PaymentsView payments={paymentList} customers={customerList} query={globalSearch} onChange={updatePayments} />}
           {activeModule === "users" && isAdmin && <UsersView users={userList} currentUserId={currentUser.id} onChange={updateUsers} />}
-          {activeModule === "reports" && <ReportsView customers={customerList} products={inventory} quotations={quotationList} leads={leadList} invoices={invoiceList} orders={orderList} payments={paymentList} services={serviceList} />}
-          {activeModule === "settings" && <SettingsView users={userList} />}
+          {activeModule === "reports" && <ReportsView customers={customerList} products={inventory} brands={brandList} settings={settings} quotations={quotationList} leads={leadList} invoices={invoiceList} orders={orderList} payments={paymentList} services={serviceList} />}
+          {activeModule === "settings" && <SettingsView settings={settings} users={userList} onChange={updateSettings} />}
         </section>
       </div>
 
       {editingCustomer !== null && (
-        <CustomerModal initial={editingCustomer === "new" ? null : editingCustomer} products={inventory} onClose={() => setEditingCustomer(null)} onSave={saveCustomer} />
+        <CustomerModal initial={editingCustomer === "new" ? null : editingCustomer} products={inventory} brands={brandList} onClose={() => setEditingCustomer(null)} onSave={saveCustomer} />
       )}
 
       {editingQuotation !== null && (
         <QuotationModal
           quotation={editingQuotation === "new" ? null : editingQuotation}
-          customers={customerList}
+          leads={leadList}
           products={inventory}
+          brands={brandList}
+          settings={settings}
           existing={quotationList}
           onClose={() => setEditingQuotation(null)}
           onSave={saveQuotation}
@@ -489,7 +783,7 @@ export default function Page() {
   );
 }
 
-function LoginScreen({ demo, onLogin }: { demo: DemoStatus; onLogin: (values: z.infer<typeof loginSchema>) => { ok: boolean; error?: string } }) {
+function LoginScreen({ demo, onLogin }: { demo: DemoStatus; onLogin: (values: z.infer<typeof loginSchema>) => Promise<{ ok: boolean; error?: string }> }) {
   const [authError, setAuthError] = useState("");
   const {
     register,
@@ -497,11 +791,11 @@ function LoginScreen({ demo, onLogin }: { demo: DemoStatus; onLogin: (values: z.
     formState: { errors }
   } = useForm<z.infer<typeof loginSchema>>({
     resolver: zodResolver(loginSchema),
-    defaultValues: { email: "admin@rampscube.com", password: "admin123" }
+    defaultValues: { email: "", password: "" }
   });
 
-  function submit(values: z.infer<typeof loginSchema>) {
-    const result = onLogin(values);
+  async function submit(values: z.infer<typeof loginSchema>) {
+    const result = await onLogin(values);
     if (!result.ok) setAuthError(result.error ?? "Unable to sign in.");
   }
 
@@ -532,14 +826,9 @@ function LoginScreen({ demo, onLogin }: { demo: DemoStatus; onLogin: (values: z.
           {authError && <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{authError}</p>}
           <button className="mt-4 h-12 w-full rounded-lg bg-blue-600 font-semibold text-white shadow-soft">Sign in</button>
           <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-slate-600">
-            <p className="font-semibold text-blue-700">Demo logins</p>
-            <p className="mt-1">
-              Admin — <span className="font-medium">admin@rampscube.com</span> / <span className="font-medium">admin123</span>
-            </p>
-            <p className="mt-0.5">
-              Staff — <span className="font-medium">priya@rampscube.com</span> / <span className="font-medium">staff123</span>
-            </p>
-            <p className="mt-1 text-xs text-slate-500">Full evaluation access · {formatRemaining(demo)}.</p>
+            <p className="font-semibold text-blue-700">Evaluation access</p>
+            <p className="mt-1">Sign in with the administrator account issued to you. Staff accounts are created from the Users module.</p>
+            <p className="mt-1 text-xs text-slate-500">{formatRemaining(demo)}.</p>
           </div>
           </div>
         </form>
@@ -563,465 +852,4 @@ function LoginScreen({ demo, onLogin }: { demo: DemoStatus; onLogin: (values: z.
       </section>
     </main>
   );
-}
-
-function Dashboard({ customers, quotations, leads, invoices, payments, services }: { customers: Customer[]; quotations: Quotation[]; leads: Lead[]; invoices: Invoice[]; payments: Payment[]; services: ServiceRequest[] }) {
-  const nameOf = (customerId: string) => {
-    const c = customers.find((item) => item.customerId === customerId);
-    return c ? c.companyName || c.customerName : customerName(customerId);
-  };
-  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const monthsToShow = new Date().getMonth() + 1; // Jan through the current month
-  const customerMonthLabels = monthNames.slice(0, monthsToShow);
-  const customersByMonth = customerMonthLabels.map((_, month) => customers.filter((item) => new Date(item.createdAt).getMonth() === month).length);
-  const quotationStatusLabels = ["Draft", "Sent", "Accepted", "Rejected"];
-  const quotationsByStatus = quotationStatusLabels.map((status) => quotations.filter((item) => item.status === status).length);
-  const stats = [
-    { label: "Total Customers", value: customers.length, icon: Users },
-    { label: "New Leads", value: leads.filter((item) => item.status === "New").length, icon: ClipboardList },
-    { label: "Pending Follow-ups", value: leads.filter((item) => item.status === "Follow-up").length, icon: CalendarClock },
-    { label: "Quotations Sent", value: quotations.filter((item) => item.status === "Sent").length, icon: FileText },
-    { label: "Invoices Pending Share", value: invoices.filter((item) => !item.shared).length, icon: ReceiptText },
-    { label: "Pending Payments", value: payments.filter((item) => item.status !== "Paid").length, icon: CreditCard },
-    { label: "Open Service Requests", value: services.filter((item) => item.status !== "Completed").length, icon: Wrench }
-  ];
-
-  return (
-    <div className="space-y-6">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {stats.map((stat) => {
-          const Icon = stat.icon;
-          return (
-            <div key={stat.label} className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="text-sm font-medium text-slate-500">{stat.label}</p>
-                  <p className="mt-2 text-3xl font-bold text-slate-950">{stat.value}</p>
-                </div>
-                <div className="grid h-11 w-11 place-items-center rounded-lg bg-blue-50 text-blue-600">
-                  <Icon className="h-5 w-5" />
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-2">
-        <Chart title="New Customers (Monthly)" values={customersByMonth} labels={customerMonthLabels} />
-        <Chart title="Quotations by Status" values={quotationsByStatus} labels={quotationStatusLabels} />
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-2">
-        <Panel title="Latest Customers">
-          <SimpleRows rows={customers.slice(0, 5).map((item) => [item.customerName, item.city || "—", item.mobile])} />
-        </Panel>
-        <Panel title="Recent Leads">
-          <SimpleRows rows={leads.slice(0, 5).map((item) => [item.name, item.town || "—", item.interestedIn || item.source])} />
-        </Panel>
-        <Panel title="Recent Quotations">
-          <SimpleRows rows={quotations.slice(0, 5).map((item) => [item.quotationNumber, nameOf(item.customerId), currency(item.total)])} />
-        </Panel>
-        <Panel title="Recent Invoices">
-          <SimpleRows rows={invoices.slice(0, 5).map((item) => [item.invoiceNumber, item.customerName, item.shared ? "Shared" : "Pending"])} />
-        </Panel>
-      </div>
-    </div>
-  );
-}
-
-function CustomersView({ customers, query, onEdit, onDelete }: { customers: Customer[]; query: string; onEdit: (customer: Customer) => void; onDelete: (customer: Customer) => void }) {
-  const rows = customers.filter((customer) => {
-    const haystack = `${customer.customerName} ${customer.companyName ?? ""} ${customer.mobile} ${customer.city} ${customer.productBrand} ${customer.productModel} ${customer.productType ?? ""}`.toLowerCase();
-    return haystack.includes(query.toLowerCase());
-  });
-
-  return (
-    <div className="space-y-6">
-      <p className="text-sm text-slate-500">{customers.length} customers</p>
-      <DataTable
-        columns={["Name", "Phone", "Town", "Product Type", "Brand", "Model", "Contact", "Actions"]}
-        rows={rows.map((item) => {
-          const phone = item.mobile.replace(/\D/g, "");
-          const waNumber = (item.whatsapp || item.mobile).replace(/\D/g, "");
-          return [
-            <span key="n" className="font-semibold text-slate-900">{item.customerName}</span>,
-            item.mobile || "—",
-            item.city || "—",
-            item.productType || "—",
-            item.productBrand || "—",
-            item.productModel || "—",
-            <div key="contact" className="flex items-center gap-2">
-              <a
-                href={`tel:${phone}`}
-                className={cn("inline-flex items-center gap-1 rounded-lg border border-blue-200 px-2.5 py-1.5 text-xs font-semibold text-blue-700 hover:border-blue-300", !phone && "pointer-events-none opacity-40")}
-                title="Call"
-              >
-                <Phone className="h-3.5 w-3.5" /> Call
-              </a>
-              <a
-                href={waNumber ? whatsappLink(waNumber, `Hello ${item.customerName}, `) : undefined}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={cn("inline-flex items-center gap-1 rounded-lg border border-green-200 px-2.5 py-1.5 text-xs font-semibold text-green-700 hover:border-green-300", !waNumber && "pointer-events-none opacity-40")}
-                title="WhatsApp"
-              >
-                <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
-              </a>
-            </div>,
-            <div key="actions" className="flex items-center gap-2">
-              <button onClick={() => onEdit(item)} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-blue-700 hover:border-blue-300">
-                <Pencil className="h-3.5 w-3.5" /> Edit
-              </button>
-              <DeleteButton resetKey={item.customerId} onDelete={() => onDelete(item)} />
-            </div>
-          ];
-        })}
-      />
-    </div>
-  );
-}
-
-function QuotationsView({
-  quotations,
-  customers,
-  products,
-  query,
-  onEdit,
-  onNew,
-  onDelete
-}: {
-  quotations: Quotation[];
-  customers: Customer[];
-  products: Product[];
-  query: string;
-  onEdit: (quotation: Quotation) => void;
-  onNew: () => void;
-  onDelete: (quotation: Quotation) => void;
-}) {
-  const toast = useToast();
-  const customerOf = (customerId: string) => customers.find((item) => item.customerId === customerId);
-  const nameOf = (customerId: string) => {
-    const c = customerOf(customerId);
-    return c ? c.companyName || c.customerName : customerName(customerId);
-  };
-  const rows = quotations.filter((item) => `${item.quotationNumber} ${item.reference ?? ""} ${nameOf(item.customerId)}`.toLowerCase().includes(query.toLowerCase()));
-
-  async function handlePdf(quotation: Quotation) {
-    try {
-      await downloadQuotationPdf(quotation, customerOf(quotation.customerId), products);
-      toast(`PDF generated for ${quotation.quotationNumber}`);
-    } catch {
-      toast("Could not generate the PDF.", "info");
-    }
-  }
-
-  function handleWhatsapp(quotation: Quotation) {
-    const customer = customerOf(quotation.customerId);
-    const message = quotationMessage(quotation, customer, products);
-    window.open(whatsappLink(customer?.whatsapp ?? customer?.mobile ?? "", message), "_blank", "noopener");
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap justify-end gap-2">
-        <button onClick={onNew} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white"><Plus className="h-4 w-4" /> New Quotation</button>
-      </div>
-      <DataTable
-        columns={["Quotation", "Reference", "Customer", "Subtotal", "GST", "Total", "Status", "Actions"]}
-        rows={rows.map((item) => [
-          item.quotationNumber,
-          item.reference || "—",
-          nameOf(item.customerId),
-          currency(item.subtotal),
-          currency(item.gst),
-          currency(item.total),
-          <Badge key={item.quotationId} label={item.status} />,
-          <div key={`${item.quotationId}-actions`} className="flex items-center gap-2">
-            <button
-              onClick={() => onEdit(item)}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-blue-700 hover:border-blue-300"
-            >
-              <Pencil className="h-3.5 w-3.5" /> Edit
-            </button>
-            <button
-              onClick={() => handlePdf(item)}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:border-slate-300"
-            >
-              <FileText className="h-3.5 w-3.5" /> PDF
-            </button>
-            <button
-              onClick={() => handleWhatsapp(item)}
-              className="inline-flex items-center gap-1 rounded-lg border border-green-200 px-2.5 py-1.5 text-xs font-semibold text-green-700 hover:border-green-300"
-            >
-              <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
-            </button>
-            <DeleteButton resetKey={item.quotationId} onDelete={() => onDelete(item)} />
-          </div>
-        ])}
-      />
-    </div>
-  );
-}
-
-function ReportsView({ customers, products, quotations, leads, invoices, orders, payments, services }: { customers: Customer[]; products: Product[]; quotations: Quotation[]; leads: Lead[]; invoices: Invoice[]; orders: Order[]; payments: Payment[]; services: ServiceRequest[] }) {
-  const toast = useToast();
-  const nameOf = (customerId: string) => {
-    const c = customers.find((item) => item.customerId === customerId);
-    return c ? c.companyName || c.customerName : customerName(customerId);
-  };
-  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-  const reports: { title: string; description: string; build: () => (string | number)[][] }[] = [
-    {
-      title: "Customer Report",
-      description: "All customers with contact, product and customer-type details.",
-      build: () => [
-        ["Name", "Phone", "Town", "Address", "Product Type", "Brand", "Model", "Type of Customer", "Mail"],
-        ...customers.map((c) => [c.customerName, c.mobile, c.city, c.address, c.productType ?? "", c.productBrand, c.productModel, c.sourceType ?? "", c.email])
-      ]
-    },
-    {
-      title: "Stock Report",
-      description: "Inventory with purchase, NLC, sale price and sold-out details.",
-      build: () => [
-        ["Brand", "Model", "Serial No", "Product Type", "Purchase Date", "NLC", "Sale Price", "Sale Date", "Customer Town", "Customer Name", "Commission", "Status"],
-        ...products.map((p) => [
-          p.brand,
-          p.model,
-          p.serialNo,
-          p.productType ?? "",
-          p.invoiceDate,
-          typeof p.nlc === "number" ? p.nlc : "",
-          p.price,
-          p.saleDate ?? "",
-          p.soldToTown ?? "",
-          p.soldToName ?? "",
-          typeof p.commission === "number" ? p.commission : "",
-          p.saleDate ? "Sold" : "In Stock"
-        ])
-      ]
-    },
-    {
-      title: "Leads Report",
-      description: "Leads with contact, product, source, interest and status.",
-      build: () => [
-        ["Lead", "Name", "Town", "Phone", "Mail", "Product Type", "Brand", "Model", "Type of Customer", "Nature", "Interested In", "Status", "Converted"],
-        ...leads.map((l) => [l.leadNumber, l.name, l.town, l.phone, l.email ?? "", l.productType ?? "", l.productBrand ?? "", l.productModel ?? "", l.sourceType ?? "", l.source, l.interestedIn, l.status, l.convertedCustomerId ? "Yes" : "No"])
-      ]
-    },
-    {
-      title: "Invoice Report",
-      description: "Invoices with source and Created / Shared state.",
-      build: () => [["Invoice", "Customer", "Town", "Date", "Amount", "Source", "Created", "Shared"], ...invoices.map((i) => [i.invoiceNumber, i.customerName, i.town, i.date, i.amount, i.source, i.created ? "Yes" : "No", i.shared ? "Yes" : "No"])]
-    },
-    {
-      title: "Quotation Report",
-      description: "Quotations with values, discount and GST.",
-      build: () => [["Quotation", "Customer", "Subtotal", "Discount", "GST", "Total", "Status"], ...quotations.map((q) => [q.quotationNumber, nameOf(q.customerId), q.subtotal, q.discount, q.gst, q.total, q.status])]
-    },
-    {
-      title: "Order Report",
-      description: "Orders with delivery and payment status.",
-      build: () => [["Order", "Customer", "Delivery", "Payment", "Status"], ...orders.map((o) => [o.orderNumber, nameOf(o.customerId), o.deliveryDate, o.paymentStatus, o.status])]
-    },
-    {
-      title: "Pending Payments",
-      description: "Invoices with an outstanding balance.",
-      build: () => [["Invoice", "Customer", "Amount", "Paid", "Balance", "Status"], ...payments.filter((p) => p.status !== "Paid").map((p) => [p.invoiceNumber, nameOf(p.customerId), p.invoiceAmount, p.paidAmount, p.balanceAmount, p.status])]
-    },
-    {
-      title: "Service Report",
-      description: "Service requests with technician and status.",
-      build: () => [["Service", "Customer", "Product", "Complaint", "Technician", "Status"], ...services.map((s) => [s.serviceNumber, nameOf(s.customerId), s.product, s.complaint, s.assignedTo, s.status])]
-    },
-    {
-      title: "Monthly Sales Summary",
-      description: "Quotation count and value by month.",
-      build: () => [
-        ["Month", "Quotations", "Total Value (INR)"],
-        ...monthNames
-          .map((name, month) => {
-            const monthly = quotations.filter((q) => new Date(q.createdAt).getMonth() === month);
-            return [name, monthly.length, monthly.reduce((sum, q) => sum + q.total, 0)] as (string | number)[];
-          })
-          .filter((row) => (row[1] as number) > 0)
-      ]
-    }
-  ];
-
-  function exportReport(report: (typeof reports)[number]) {
-    downloadCSV(`${report.title.replace(/\s+/g, "-")}.csv`, report.build());
-    toast(`${report.title} exported`);
-  }
-
-  return (
-    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-      {reports.map((report) => (
-        <div key={report.title} className="flex flex-col rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
-          <FileBarChart className="mb-4 h-8 w-8 text-blue-600" />
-          <h3 className="font-bold text-slate-950">{report.title}</h3>
-          <p className="mt-2 flex-1 text-sm text-slate-500">{report.description}</p>
-          <button
-            onClick={() => exportReport(report)}
-            className="mt-5 inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white"
-          >
-            <Download className="h-4 w-4" /> Export CSV
-          </button>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function SettingsView({ users }: { users: User[] }) {
-  return (
-    <div className="grid gap-6 xl:grid-cols-[1fr_0.8fr]">
-      <Panel title="Company Information">
-        <div className="grid gap-4 sm:grid-cols-2">
-          {["Company Name", "GST Number", "Phone", "Address", "Quotation Footer", "Terms & Conditions"].map((label) => (
-            <label key={label} className="block text-sm font-semibold text-slate-700">
-              {label}
-              <input className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" defaultValue={label === "Company Name" ? "RAMPS CUBE" : ""} />
-            </label>
-          ))}
-        </div>
-      </Panel>
-      <Panel title="User Management">
-        <p className="mb-3 text-sm text-slate-500">Manage staff and admin accounts in the <span className="font-semibold text-blue-700">Users</span> module.</p>
-        <SimpleRows rows={users.map((user) => [user.name, user.email, `${user.role} · ${user.status}`])} />
-      </Panel>
-    </div>
-  );
-}
-
-function CustomerModal({ initial, products, onClose, onSave }: { initial: Customer | null; products: Product[]; onClose: () => void; onSave: (customer: Customer) => void }) {
-  const {
-    register,
-    handleSubmit,
-    formState: { errors }
-  } = useForm<CustomerForm>({
-    resolver: zodResolver(customerSchema),
-    defaultValues: initial
-      ? {
-          customerName: initial.customerName,
-          mobile: initial.mobile,
-          city: initial.city,
-          address: initial.address,
-          productBrand: initial.productBrand,
-          productModel: initial.productModel,
-          productType: initial.productType ?? "",
-          email: initial.email,
-          sourceType: initial.sourceType ?? ""
-        }
-      : undefined
-  });
-
-  // Brand / model dropdowns are built from the inventory; the current record's own value
-  // is merged in so editing an item whose brand/model is no longer in stock still shows it.
-  const brandOptions = uniqueSorted([...products.map((p) => p.brand), initial?.productBrand]);
-  const modelOptions = uniqueSorted([...products.map((p) => p.model), initial?.productModel]);
-
-  function submit(values: CustomerForm) {
-    onSave({
-      customerId: initial?.customerId ?? `CUST-${Date.now()}`,
-      createdAt: initial?.createdAt ?? new Date().toISOString(),
-      whatsapp: initial?.whatsapp,
-      companyName: initial?.companyName,
-      gst: initial?.gst,
-      customerType: initial?.customerType,
-      remarks: initial?.remarks,
-      customerName: values.customerName,
-      mobile: values.mobile,
-      city: values.city ?? "",
-      address: values.address ?? "",
-      productModel: values.productModel ?? "",
-      productBrand: values.productBrand ?? "",
-      productType: (values.productType || undefined) as Customer["productType"],
-      email: values.email ?? "",
-      sourceType: (values.sourceType || undefined) as Customer["sourceType"]
-    });
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4">
-      <form onSubmit={handleSubmit(submit)} className="max-h-[92vh] w-full max-w-3xl overflow-auto rounded-lg bg-white p-6 shadow-2xl">
-        <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-xl font-bold">{initial ? "Edit Customer" : "Add Customer"}</h2>
-          <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 p-2" aria-label="Close"><X className="h-5 w-5" /></button>
-        </div>
-        <p className="mb-6 text-sm text-slate-500">Only Name and Phone are required.</p>
-        <div className="grid gap-4 md:grid-cols-2">
-          <label className="text-sm font-semibold text-slate-700">
-            Name *
-            <input className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("customerName")} />
-            {errors.customerName && <span className="mt-1 block text-xs text-red-600">{errors.customerName.message}</span>}
-          </label>
-          <label className="text-sm font-semibold text-slate-700">
-            Phone Number *
-            <input className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("mobile")} />
-            {errors.mobile && <span className="mt-1 block text-xs text-red-600">{errors.mobile.message}</span>}
-          </label>
-          <label className="text-sm font-semibold text-slate-700">
-            Town
-            <input className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("city")} />
-          </label>
-          <label className="text-sm font-semibold text-slate-700">
-            Address
-            <input className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("address")} />
-          </label>
-          <label className="text-sm font-semibold text-slate-700">
-            Product Brand
-            <select className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("productBrand")}>
-              <option value="">— Select —</option>
-              {brandOptions.map((brand) => (
-                <option key={brand} value={brand}>{brand}</option>
-              ))}
-            </select>
-          </label>
-          <label className="text-sm font-semibold text-slate-700">
-            Product Model
-            <select className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("productModel")}>
-              <option value="">— Select —</option>
-              {modelOptions.map((model) => (
-                <option key={model} value={model}>{model}</option>
-              ))}
-            </select>
-          </label>
-          <label className="text-sm font-semibold text-slate-700">
-            Product Type
-            <select className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("productType")}>
-              <option value="">— Select —</option>
-              {PRODUCT_TYPES.map((type) => (
-                <option key={type} value={type}>{type}</option>
-              ))}
-            </select>
-          </label>
-          <label className="text-sm font-semibold text-slate-700">
-            Mail ID
-            <input className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("email")} />
-            {errors.email && <span className="mt-1 block text-xs text-red-600">{errors.email.message}</span>}
-          </label>
-          <label className="text-sm font-semibold text-slate-700">
-            Type of Customer
-            <select className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("sourceType")}>
-              <option value="">— Select —</option>
-              {CUSTOMER_SOURCE_TYPES.map((type) => (
-                <option key={type} value={type}>{type}</option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <div className="mt-6 flex justify-end gap-3">
-          <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 px-4 py-2 font-semibold">Cancel</button>
-          <button className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white"><UserPlus className="h-4 w-4" /> Save Customer</button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-function customerName(customerId: string) {
-  const customer = customerSeed.find((item) => item.customerId === customerId);
-  return customer?.companyName || customer?.customerName || customerId;
 }

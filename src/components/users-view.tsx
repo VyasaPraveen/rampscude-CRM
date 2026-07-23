@@ -1,20 +1,21 @@
 "use client";
 
-import { Pencil, Save, Trash2, UserPlus, X } from "lucide-react";
+import { Pencil, Save, Trash2, UserPlus } from "lucide-react";
 import { useState } from "react";
 import type { Role, User, UserStatus } from "@/types/crm";
+import { withHashedPassword } from "@/lib/password";
 import { shortDate } from "@/utils/format";
-import { Badge, DataTable } from "@/components/ui";
+import { Badge, DataTable, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { cn } from "@/lib/utils";
 
 const ROLES: Role[] = ["Admin", "Staff"];
 const DEPARTMENTS = ["Management", "Sales", "Service", "Logistics", "Accounts"];
 
-type Draft = Omit<User, "id"> & { id?: string };
+type Draft = Omit<User, "id" | "password" | "passwordHash" | "passwordSalt"> & { id?: string; newPassword: string };
 
 function emptyDraft(): Draft {
-  return { name: "", email: "", phone: "", role: "Staff", department: "Sales", status: "Active", joinedAt: new Date().toISOString().slice(0, 10), password: "staff123" };
+  return { name: "", email: "", phone: "", role: "Staff", department: "Sales", status: "Active", joinedAt: new Date().toISOString().slice(0, 10), newPassword: "" };
 }
 
 /**
@@ -36,7 +37,7 @@ export function UsersView({
   const activeCount = users.filter((user) => user.status === "Active").length;
   const staffCount = users.filter((user) => user.role === "Staff").length;
 
-  function save(draft: Draft) {
+  async function save(draft: Draft): Promise<string | null> {
     const email = draft.email.trim().toLowerCase();
     const clash = users.some((user) => user.email.toLowerCase() === email && user.id !== draft.id);
     if (clash) return "A user with this email already exists.";
@@ -46,11 +47,14 @@ export function UsersView({
       return "You cannot change your own role or deactivate your own account.";
     }
 
-    if (draft.id) {
-      onChange(users.map((user) => (user.id === draft.id ? ({ ...user, ...draft, id: draft.id } as User) : user)));
-    } else {
-      onChange([{ ...draft, id: `USR-${Date.now()}` } as User, ...users]);
-    }
+    const { newPassword, ...fields } = draft;
+    const existing = users.find((user) => user.id === draft.id);
+    if (!existing && !newPassword.trim()) return "Set a password for the new user.";
+
+    let record = { ...(existing ?? {}), ...fields, id: draft.id ?? `USR-${Date.now()}` } as User;
+    if (newPassword.trim()) record = await withHashedPassword(record, newPassword.trim());
+
+    onChange(existing ? users.map((user) => (user.id === record.id ? record : user)) : [record, ...users]);
     setEditing(null);
     toast(draft.id ? `${draft.name} updated` : `${draft.name} added`);
     return null;
@@ -98,7 +102,7 @@ export function UsersView({
           user.department,
           <Badge key="s" label={user.status} />,
           <div key="a" className="flex items-center gap-2">
-            <button onClick={() => setEditing({ ...user })} className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 text-slate-500 hover:text-blue-600" aria-label="Edit user">
+            <button onClick={() => setEditing({ ...user, newPassword: "" })} className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 text-slate-500 hover:text-blue-600" aria-label="Edit user">
               <Pencil className="h-4 w-4" />
             </button>
             <button
@@ -130,7 +134,7 @@ export function UsersView({
   );
 }
 
-function UserModal({ draft, onClose, onSave }: { readonly draft: Draft; readonly onClose: () => void; readonly onSave: (draft: Draft) => string | null }) {
+function UserModal({ draft, onClose, onSave }: { readonly draft: Draft; readonly onClose: () => void; readonly onSave: (draft: Draft) => Promise<string | null> }) {
   const [form, setForm] = useState<Draft>(draft);
   const [error, setError] = useState("");
 
@@ -142,26 +146,22 @@ function UserModal({ draft, onClose, onSave }: { readonly draft: Draft; readonly
     if (form.name.trim().length < 2) return setError("Enter the user's name.");
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(form.email)) return setError("Enter a valid email.");
     if (form.phone.trim().length < 10) return setError("Enter a valid phone number.");
-    if (form.password.trim().length < 6) return setError("Password must be at least 6 characters.");
-    const message = onSave(form);
-    if (message) setError(message);
+    if (form.newPassword.trim() && form.newPassword.trim().length < 6) return setError("Password must be at least 6 characters.");
+    if (!form.id && form.newPassword.trim().length < 6) return setError("Set a password of at least 6 characters.");
+    setError("");
+    void onSave(form).then((message) => {
+      if (message) setError(message);
+    });
   }
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4">
-      <div className="max-h-[92vh] w-full max-w-2xl overflow-auto rounded-lg bg-white p-6 shadow-2xl">
-        <div className="mb-6 flex items-center justify-between">
-          <h2 className="text-xl font-bold">{form.id ? "Edit User" : "Add User"}</h2>
-          <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 p-2" aria-label="Close">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
+    <Modal title={form.id ? "Edit User" : "Add User"} size="lg" onClose={onClose}>
 
         <div className="grid gap-4 md:grid-cols-2">
           <Field label="Full Name" value={form.name} onChange={(value) => set("name", value)} />
           <Field label="Email" value={form.email} onChange={(value) => set("email", value)} type="email" />
           <Field label="Phone" value={form.phone} onChange={(value) => set("phone", value)} />
-          <Field label="Password" value={form.password} onChange={(value) => set("password", value)} />
+          <Field label={form.id ? "New Password (leave blank to keep current)" : "Password"} value={form.newPassword} onChange={(value) => set("newPassword", value)} type="password" />
           <label className="text-sm font-semibold text-slate-700">
             Role
             <select value={form.role} onChange={(event) => set("role", event.target.value as Role)} className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2">
@@ -199,8 +199,7 @@ function UserModal({ draft, onClose, onSave }: { readonly draft: Draft; readonly
             <Save className="h-4 w-4" /> Save User
           </button>
         </div>
-      </div>
-    </div>
+      </Modal>
   );
 }
 

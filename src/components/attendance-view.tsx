@@ -7,14 +7,15 @@ import { Panel } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { cn } from "@/lib/utils";
 
-const MARKABLE: AttendanceStatus[] = ["Present", "Absent", "Half Day", "Leave", "Week Off"];
+const MARKABLE: AttendanceStatus[] = ["Present", "Absent", "Half Day", "Leave", "Casual Leave", "Holiday"];
 
 const CELL_TONE: Record<AttendanceStatus, string> = {
   Present: "bg-green-100 text-green-700",
   Absent: "bg-red-100 text-red-700",
   "Half Day": "bg-yellow-100 text-yellow-700",
   Leave: "bg-orange-100 text-orange-700",
-  "Week Off": "bg-slate-100 text-slate-400"
+  "Casual Leave": "bg-purple-100 text-purple-700",
+  "Holiday": "bg-slate-100 text-slate-400"
 };
 
 const LETTER: Record<AttendanceStatus, string> = {
@@ -22,17 +23,20 @@ const LETTER: Record<AttendanceStatus, string> = {
   Absent: "A",
   "Half Day": "H",
   Leave: "L",
-  "Week Off": "O"
+  "Casual Leave": "CL",
+  "Holiday": "O"
 };
+
+/** Statuses for which recording in/out times makes sense. */
+const TIMED: AttendanceStatus[] = ["Present", "Half Day"];
 
 function pad(value: number) {
   return String(value).padStart(2, "0");
 }
 
-function checkTimes(status: AttendanceStatus): Pick<AttendanceRecord, "checkIn" | "checkOut"> {
-  if (status === "Present") return { checkIn: "09:30", checkOut: "18:30" };
-  if (status === "Half Day") return { checkIn: "09:30", checkOut: "13:30" };
-  return {};
+/** Canonical preset in/out times for a timed status. */
+function presetTimes(status: AttendanceStatus): Pick<AttendanceRecord, "checkIn" | "checkOut"> {
+  return status === "Half Day" ? { checkIn: "09:30", checkOut: "13:30" } : { checkIn: "09:30", checkOut: "18:30" };
 }
 
 /**
@@ -63,16 +67,36 @@ export function AttendanceView({
     return map;
   }, [records]);
 
+  function recordFor(userId: string, date: string): AttendanceRecord | undefined {
+    return byId.get(`${userId}_${date}`);
+  }
+
   function statusFor(userId: string, date: string): AttendanceStatus | undefined {
-    return byId.get(`${userId}_${date}`)?.status;
+    return recordFor(userId, date)?.status;
   }
 
   function mark(userId: string, date: string, status: AttendanceStatus) {
     const id = `${userId}_${date}`;
-    const record: AttendanceRecord = { id, userId, date, status, ...checkTimes(status) };
+    const existing = byId.get(id);
+    // Keep the entered times only when re-selecting the same status; a status change
+    // applies that status's fresh preset (so Half Day → Present gives a full-day out-time).
+    let times: Pick<AttendanceRecord, "checkIn" | "checkOut"> = {};
+    if (TIMED.includes(status)) {
+      times = existing?.status === status ? { checkIn: existing.checkIn, checkOut: existing.checkOut } : presetTimes(status);
+    }
+    const record: AttendanceRecord = { id, userId, date, status, ...times };
     onChange(byId.has(id) ? records.map((item) => (item.id === id ? record : item)) : [...records, record]);
     const name = users.find((user) => user.id === userId)?.name ?? "Staff";
     toast(`${name} · ${status}`);
+  }
+
+  // Set the in / out time for a day. Creates a Present record first if the day is unmarked.
+  function setTime(userId: string, date: string, field: "checkIn" | "checkOut", value: string) {
+    const id = `${userId}_${date}`;
+    const existing = byId.get(id);
+    const base: AttendanceRecord = existing ?? { id, userId, date, status: "Present" };
+    const record: AttendanceRecord = { ...base, [field]: value || undefined };
+    onChange(byId.has(id) ? records.map((item) => (item.id === id ? record : item)) : [...records, record]);
   }
 
   // Today snapshot metrics.
@@ -87,12 +111,12 @@ export function AttendanceView({
   const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
 
   const summaries = staff.map((user) => {
-    const counts = { Present: 0, Absent: 0, "Half Day": 0, Leave: 0, "Week Off": 0 } as Record<AttendanceStatus, number>;
+    const counts = { Present: 0, Absent: 0, "Half Day": 0, Leave: 0, "Casual Leave": 0, "Holiday": 0 } as Record<AttendanceStatus, number>;
     days.forEach((day) => {
       const status = statusFor(user.id, `${month}-${pad(day)}`);
       if (status) counts[status] += 1;
     });
-    const workingDays = counts.Present + counts.Absent + counts["Half Day"] + counts.Leave;
+    const workingDays = counts.Present + counts.Absent + counts["Half Day"] + counts.Leave + counts["Casual Leave"];
     const pct = workingDays ? Math.round(((counts.Present + counts["Half Day"] * 0.5) / workingDays) * 100) : 0;
     return { user, counts, pct, workingDays };
   });
@@ -128,27 +152,53 @@ export function AttendanceView({
         {activeStaff.length ? (
           <div className="space-y-3">
             {activeStaff.map((user) => {
-              const current = statusFor(user.id, markDate);
+              const record = recordFor(user.id, markDate);
+              const current = record?.status;
+              const showTimes = current ? TIMED.includes(current) : false;
               return (
-                <div key={user.id} className="flex flex-col gap-3 rounded-lg border border-slate-200 p-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p className="font-semibold text-slate-900">{user.name}</p>
-                    <p className="text-xs text-slate-500">{user.department}</p>
+                <div key={user.id} className="flex flex-col gap-3 rounded-lg border border-slate-200 p-3">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="font-semibold text-slate-900">{user.name}</p>
+                      <p className="text-xs text-slate-500">{user.department}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {MARKABLE.map((status) => (
+                        <button
+                          key={status}
+                          onClick={() => mark(user.id, markDate, status)}
+                          className={cn(
+                            "rounded-lg border px-3 py-1.5 text-xs font-semibold transition",
+                            current === status ? "border-blue-600 bg-blue-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-blue-300"
+                          )}
+                        >
+                          {status}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {MARKABLE.map((status) => (
-                      <button
-                        key={status}
-                        onClick={() => mark(user.id, markDate, status)}
-                        className={cn(
-                          "rounded-lg border px-3 py-1.5 text-xs font-semibold transition",
-                          current === status ? "border-blue-600 bg-blue-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-blue-300"
-                        )}
-                      >
-                        {status}
-                      </button>
-                    ))}
-                  </div>
+                  {showTimes && (
+                    <div className="flex flex-wrap items-center gap-4 border-t border-slate-100 pt-3">
+                      <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+                        In-time
+                        <input
+                          type="time"
+                          value={record?.checkIn ?? ""}
+                          onChange={(event) => setTime(user.id, markDate, "checkIn", event.target.value)}
+                          className="h-9 rounded-lg border border-slate-200 px-2 text-sm font-normal outline-none ring-blue-500 focus:ring-2"
+                        />
+                      </label>
+                      <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+                        Out-time
+                        <input
+                          type="time"
+                          value={record?.checkOut ?? ""}
+                          onChange={(event) => setTime(user.id, markDate, "checkOut", event.target.value)}
+                          className="h-9 rounded-lg border border-slate-200 px-2 text-sm font-normal outline-none ring-blue-500 focus:ring-2"
+                        />
+                      </label>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -194,6 +244,7 @@ export function AttendanceView({
                 <th className="px-3 py-2 text-center text-xs font-bold uppercase tracking-wide text-slate-500">P</th>
                 <th className="px-2 py-2 text-center text-xs font-bold uppercase tracking-wide text-slate-500">A</th>
                 <th className="px-2 py-2 text-center text-xs font-bold uppercase tracking-wide text-slate-500">L</th>
+                <th className="px-2 py-2 text-center text-xs font-bold uppercase tracking-wide text-slate-500">CL</th>
                 <th className="px-3 py-2 text-center text-xs font-bold uppercase tracking-wide text-slate-500">%</th>
               </tr>
             </thead>
@@ -218,12 +269,13 @@ export function AttendanceView({
                   <td className="px-3 py-2 text-center font-semibold text-green-700">{counts.Present}</td>
                   <td className="px-2 py-2 text-center font-semibold text-red-600">{counts.Absent}</td>
                   <td className="px-2 py-2 text-center font-semibold text-orange-600">{counts.Leave}</td>
+                  <td className="px-2 py-2 text-center font-semibold text-purple-600">{counts["Casual Leave"]}</td>
                   <td className={cn("px-3 py-2 text-center font-bold", pct >= 90 ? "text-green-700" : pct >= 75 ? "text-amber-600" : "text-red-600")}>{pct}%</td>
                 </tr>
               ))}
               {!summaries.length && (
                 <tr>
-                  <td className="px-3 py-8 text-center text-sm text-slate-500" colSpan={days.length + 5}>
+                  <td className="px-3 py-8 text-center text-sm text-slate-500" colSpan={days.length + 6}>
                     No staff records for this month.
                   </td>
                 </tr>

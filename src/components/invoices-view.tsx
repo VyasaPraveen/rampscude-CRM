@@ -1,9 +1,9 @@
 "use client";
 
-import { CheckCircle2, FileUp, Info, Plus, Save, Send, X } from "lucide-react";
+import { CheckCircle2, FileUp, Info, Plus, Save, Send } from "lucide-react";
 import { useRef, useState } from "react";
 import type { Invoice } from "@/types/crm";
-import { Badge, DataTable, DeleteButton } from "@/components/ui";
+import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { currency, shortDate } from "@/utils/format";
 import { cn } from "@/lib/utils";
@@ -247,14 +247,7 @@ function InvoiceModal({ onClose, onSave, count }: { readonly onClose: () => void
   }
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4">
-      <div className="max-h-[92vh] w-full max-w-xl overflow-auto rounded-lg bg-white p-6 shadow-2xl">
-        <div className="mb-6 flex items-center justify-between">
-          <h2 className="text-xl font-bold">Add Invoice</h2>
-          <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 p-2" aria-label="Close">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
+    <Modal title="Add Invoice" size="md" onClose={onClose}>
         <div className="grid gap-4 md:grid-cols-2">
           <Field label="Invoice No" value={form.invoiceNumber} onChange={(v) => set("invoiceNumber", v)} placeholder="auto" />
           <Field label="Customer *" value={form.customerName} onChange={(v) => set("customerName", v)} />
@@ -269,8 +262,7 @@ function InvoiceModal({ onClose, onSave, count }: { readonly onClose: () => void
             <Save className="h-4 w-4" /> Save Invoice
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

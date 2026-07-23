@@ -1,18 +1,24 @@
 "use client";
 
-import { Plus, Save, Trash2, X } from "lucide-react";
+import { Plus, Save, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { Customer, Product, Quotation, QuotationStatus } from "@/types/crm";
+import type { Brand, CompanySettings, Lead, Product, Quotation, QuotationStatus } from "@/types/crm";
 import { productLabel } from "@/types/crm";
 import { currency } from "@/utils/format";
+import { Modal } from "@/components/ui";
+import { computeTotals, gstLabel, rateForProduct } from "@/lib/gst";
 
 const STATUSES: QuotationStatus[] = ["Draft", "Sent", "Accepted", "Rejected"];
-const GST_RATE = 0.18;
 
-type LineItem = { productId: string; quantity: number; price: number };
+type LineItem = { productId: string; quantity: number; price: number; gstRate?: number };
 
 function nextQuotationNumber(existing: Quotation[]): string {
-  const seq = existing.length + 1;
+  // Use the max existing sequence (not the count) so deletions never reuse a number.
+  const seq =
+    existing.reduce((max, q) => {
+      const match = /(\d+)\s*$/.exec(q.quotationNumber);
+      return match ? Math.max(max, Number(match[1])) : max;
+    }, 0) + 1;
   return `RC/QTN/2026/${String(seq).padStart(3, "0")}`;
 }
 
@@ -22,38 +28,62 @@ function nextQuotationNumber(existing: Quotation[]): string {
  */
 export function QuotationModal({
   quotation,
-  customers,
+  leads,
   products,
+  brands,
+  settings,
   existing,
   onClose,
   onSave
 }: {
   readonly quotation: Quotation | null;
-  readonly customers: Customer[];
+  readonly leads: Lead[];
   readonly products: Product[];
+  readonly brands: Brand[];
+  readonly settings: CompanySettings;
   readonly existing: Quotation[];
   readonly onClose: () => void;
   readonly onSave: (quotation: Quotation) => void;
 }) {
   const isEdit = Boolean(quotation);
-  const [customerId, setCustomerId] = useState(quotation?.customerId ?? customers[0]?.customerId ?? "");
+  // Quotations are raised against a lead. An older quotation that only carries a
+  // customer id is matched back to the lead it was converted from.
+  const initialLeadId =
+    quotation?.leadId ??
+    (quotation?.customerId ? leads.find((l) => l.convertedCustomerId === quotation.customerId)?.leadId : undefined) ??
+    leads[0]?.leadId ??
+    "";
+  const [leadId, setLeadId] = useState(initialLeadId);
   const [reference, setReference] = useState(quotation?.reference ?? "");
   const [status, setStatus] = useState<QuotationStatus>(quotation?.status ?? "Draft");
   const [discount, setDiscount] = useState<number>(quotation?.discount ?? 0);
   const [items, setItems] = useState<LineItem[]>(
     quotation?.products.length
       ? quotation.products.map((line) => ({ ...line }))
-      : [{ productId: products[0]?.productId ?? "", quantity: 1, price: products[0]?.price ?? 0 }]
+      : [
+          {
+            productId: products[0]?.productId ?? "",
+            quantity: 1,
+            price: products[0]?.price ?? 0,
+            gstRate: products[0] ? rateForProduct(products[0], brands, settings) : settings.gstRate
+          }
+        ]
   );
   const [error, setError] = useState("");
 
-  const { subtotal, gst, total, effectiveDiscount } = useMemo(() => {
-    const sub = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
-    const capped = Math.min(discount, sub); // a discount can never exceed the subtotal
-    const taxable = sub - capped;
-    const tax = Math.round(taxable * GST_RATE);
-    return { subtotal: sub, gst: tax, total: taxable + tax, effectiveDiscount: capped };
-  }, [items, discount]);
+  // Offer the admin's slabs, plus any rate already present on this quotation.
+  const slabOptions = [...new Set([...(settings.gstSlabs ?? []), settings.gstRate, ...items.map((line) => line.gstRate ?? -1)])]
+    .filter((rate) => typeof rate === "number" && rate >= 0)
+    .sort((a, b) => a - b);
+
+  const { subtotal, gst, total, effectiveDiscount, byRate } = useMemo(
+    () =>
+      computeTotals(items, discount, (line) => {
+        if (typeof line.gstRate === "number") return line.gstRate;
+        return rateForProduct(products.find((p) => p.productId === line.productId), brands, settings);
+      }),
+    [items, discount, products, brands, settings]
+  );
 
   function updateItem(index: number, patch: Partial<LineItem>) {
     setItems((current) => current.map((item, i) => (i === index ? { ...item, ...patch } : item)));
@@ -61,12 +91,20 @@ export function QuotationModal({
 
   function setProduct(index: number, productId: string) {
     const product = products.find((p) => p.productId === productId);
-    updateItem(index, { productId, price: product?.price ?? 0 });
+    updateItem(index, { productId, price: product?.price ?? 0, gstRate: rateForProduct(product, brands, settings) });
   }
 
   function addItem() {
     const product = products[0];
-    setItems((current) => [...current, { productId: product?.productId ?? "", quantity: 1, price: product?.price ?? 0 }]);
+    setItems((current) => [
+      ...current,
+      {
+        productId: product?.productId ?? "",
+        quantity: 1,
+        price: product?.price ?? 0,
+        gstRate: product ? rateForProduct(product, brands, settings) : settings.gstRate
+      }
+    ]);
   }
 
   function removeItem(index: number) {
@@ -74,8 +112,9 @@ export function QuotationModal({
   }
 
   function submit() {
-    if (!customerId) {
-      setError("Select a customer.");
+    const lead = leads.find((item) => item.leadId === leadId);
+    if (!lead) {
+      setError("Select a lead. Create one in the Leads module first.");
       return;
     }
     if (items.some((item) => !item.productId || item.quantity < 1)) {
@@ -86,7 +125,10 @@ export function QuotationModal({
       quotationId: quotation?.quotationId ?? `QUO-${Date.now()}`,
       quotationNumber: quotation?.quotationNumber ?? nextQuotationNumber(existing),
       reference: reference.trim() || undefined,
-      customerId,
+      leadId: lead.leadId,
+      customerLabel: lead.name,
+      // Once the lead has been converted, keep the customer linked too.
+      customerId: lead.convertedCustomerId ?? "",
       products: items,
       subtotal,
       discount: effectiveDiscount,
@@ -98,32 +140,27 @@ export function QuotationModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4">
-      <div className="max-h-[92vh] w-full max-w-3xl overflow-auto rounded-lg bg-white p-6 shadow-2xl">
-        <div className="mb-6 flex items-center justify-between">
-          <div>
-            <h2 className="text-xl font-bold">{isEdit ? "Edit Quotation" : "New Quotation"}</h2>
-            {quotation && <p className="text-sm text-slate-500">{quotation.quotationNumber}</p>}
-          </div>
-          <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 p-2" aria-label="Close">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
+    <Modal title={isEdit ? "Edit Quotation" : "New Quotation"} subtitle={quotation?.quotationNumber} size="xl" onClose={onClose}>
 
         <div className="grid gap-4 md:grid-cols-3">
           <label className="text-sm font-semibold text-slate-700 md:col-span-2">
-            Customer
+            Lead
             <select
-              value={customerId}
-              onChange={(event) => setCustomerId(event.target.value)}
+              value={leadId}
+              onChange={(event) => setLeadId(event.target.value)}
               className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2"
             >
-              {customers.map((customer) => (
-                <option key={customer.customerId} value={customer.customerId}>
-                  {customer.companyName || customer.customerName}
+              <option value="">— Select a lead —</option>
+              {leads.map((lead) => (
+                <option key={lead.leadId} value={lead.leadId}>
+                  {[lead.name, lead.town, lead.phone].filter(Boolean).join(" · ")}
+                  {lead.convertedCustomerId ? " (customer)" : ""}
                 </option>
               ))}
             </select>
+            {leads.length === 0 && (
+              <span className="mt-1 block text-xs font-normal text-amber-600">No leads yet — add one in the Leads module first.</span>
+            )}
           </label>
           <label className="text-sm font-semibold text-slate-700">
             Status
@@ -157,7 +194,7 @@ export function QuotationModal({
           </div>
           <div className="space-y-3">
             {items.map((item, index) => (
-              <div key={index} className="grid items-end gap-3 rounded-lg border border-slate-200 p-3 sm:grid-cols-[1fr_90px_120px_auto]">
+              <div key={index} className="grid items-end gap-3 rounded-lg border border-slate-200 p-3 sm:grid-cols-[1fr_80px_110px_96px_auto]">
                 <label className="text-xs font-semibold text-slate-600">
                   Product
                   <select
@@ -165,6 +202,7 @@ export function QuotationModal({
                     onChange={(event) => setProduct(index, event.target.value)}
                     className="mt-1 h-10 w-full rounded-lg border border-slate-200 px-2 text-sm font-normal outline-none ring-blue-500 focus:ring-2"
                   >
+                    <option value="">— Select a product —</option>
                     {products.map((product) => (
                       <option key={product.productId} value={product.productId}>
                         {productLabel(product)}
@@ -191,6 +229,18 @@ export function QuotationModal({
                     onChange={(event) => updateItem(index, { price: Math.max(0, Number(event.target.value) || 0) })}
                     className="mt-1 h-10 w-full rounded-lg border border-slate-200 px-2 text-sm font-normal outline-none ring-blue-500 focus:ring-2"
                   />
+                </label>
+                <label className="text-xs font-semibold text-slate-600">
+                  GST %
+                  <select
+                    value={String(item.gstRate ?? rateForProduct(products.find((p) => p.productId === item.productId), brands, settings))}
+                    onChange={(event) => updateItem(index, { gstRate: Number(event.target.value) })}
+                    className="mt-1 h-10 w-full rounded-lg border border-slate-200 px-2 text-sm font-normal outline-none ring-blue-500 focus:ring-2"
+                  >
+                    {slabOptions.map((rate) => (
+                      <option key={rate} value={rate}>{rate}%</option>
+                    ))}
+                  </select>
                 </label>
                 <button
                   type="button"
@@ -220,7 +270,9 @@ export function QuotationModal({
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">
             <Row label="Subtotal" value={currency(subtotal)} />
             <Row label="Discount" value={`- ${currency(effectiveDiscount)}`} />
-            <Row label={`GST (${Math.round(GST_RATE * 100)}%)`} value={currency(gst)} />
+            {byRate.length > 1
+              ? byRate.map((bucket) => <Row key={bucket.rate} label={`GST @ ${bucket.rate}%`} value={currency(bucket.tax)} />)
+              : <Row label={gstLabel(byRate, settings.gstRate)} value={currency(gst)} />}
             <div className="mt-2 border-t border-slate-200 pt-2">
               <Row label="Total" value={currency(total)} bold />
             </div>
@@ -237,8 +289,7 @@ export function QuotationModal({
             <Save className="h-4 w-4" /> {isEdit ? "Save changes" : "Create quotation"}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

@@ -14,7 +14,7 @@ export function SearchView({ customers, products, leads }: { readonly customers:
     ? customers.filter((c) => `${c.customerName} ${c.city} ${c.mobile} ${c.productBrand} ${c.productModel} ${c.companyName ?? ""}`.toLowerCase().includes(q))
     : [];
   const inventoryHits = q ? products.filter((p) => `${p.brand} ${p.model} ${p.serialNo}`.toLowerCase().includes(q)) : [];
-  const leadHits = q ? leads.filter((l) => `${l.name} ${l.town} ${l.phone} ${l.interestedIn} ${l.productBrand ?? ""} ${l.productModel ?? ""}`.toLowerCase().includes(q)) : [];
+  const leadHits = q ? leads.filter((l) => `${l.name} ${l.town} ${l.phone} ${l.source} ${l.productBrand ?? ""} ${l.productModel ?? ""}`.toLowerCase().includes(q)) : [];
 
   const total = customerHits.length + inventoryHits.length + leadHits.length;
 
@@ -60,8 +60,8 @@ export function SearchView({ customers, products, leads }: { readonly customers:
       {leadHits.length > 0 && (
         <Panel title={`Leads (${leadHits.length})`}>
           <DataTable
-            columns={["Name", "Town", "Phone", "Brand", "Model", "Interested In", "Status"]}
-            rows={leadHits.map((l) => [l.name, l.town || "—", l.phone || "—", l.productBrand || "—", l.productModel || "—", l.interestedIn || "—", <Badge key={l.leadId} label={l.status} />])}
+            columns={["Name", "Town", "Phone", "Brand", "Model", "Nature of Enquiry", "Status"]}
+            rows={leadHits.map((l) => [l.name, l.town || "—", l.phone || "—", l.productBrand || "—", l.productModel || "—", l.source, <Badge key={l.leadId} label={l.status} />])}
           />
         </Panel>
       )}

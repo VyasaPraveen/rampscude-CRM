@@ -1,9 +1,9 @@
 "use client";
 
-import { Pencil, Plus, Save, X } from "lucide-react";
+import { Pencil, Plus, Save } from "lucide-react";
 import { useState } from "react";
 import type { Customer, Order, OrderStatus, PaymentStatus } from "@/types/crm";
-import { Badge, DataTable, DeleteButton } from "@/components/ui";
+import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { shortDate } from "@/utils/format";
 
@@ -84,12 +84,7 @@ function OrderModal({ initial, customers, count, onClose, onSave }: { readonly i
   }
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4">
-      <div className="w-full max-w-2xl overflow-auto rounded-lg bg-white p-6 shadow-2xl">
-        <div className="mb-6 flex items-center justify-between">
-          <h2 className="text-xl font-bold">{initial ? "Edit Order" : "New Order"}</h2>
-          <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 p-2" aria-label="Close"><X className="h-5 w-5" /></button>
-        </div>
+    <Modal title={initial ? "Edit Order" : "New Order"} size="lg" onClose={onClose}>
         <div className="grid gap-4 md:grid-cols-2">
           <label className="text-sm font-semibold text-slate-700 md:col-span-2">
             Customer
@@ -109,8 +104,7 @@ function OrderModal({ initial, customers, count, onClose, onSave }: { readonly i
           <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 px-4 py-2 font-semibold">Cancel</button>
           <button type="button" onClick={submit} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white"><Save className="h-4 w-4" /> Save Order</button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

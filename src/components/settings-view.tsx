@@ -1,0 +1,281 @@
+"use client";
+
+import { Building2, ImageUp, Plus, Save, Trash2 } from "lucide-react";
+import { useState } from "react";
+import type { CompanySettings, User } from "@/types/crm";
+import { Panel, SimpleRows } from "@/components/ui";
+import { useToast } from "@/components/toast";
+
+/** Max size for an uploaded logo / signature. Kept small — images are stored inline. */
+const MAX_IMAGE_BYTES = 400_000;
+
+type TextKey = Exclude<keyof CompanySettings, "logo" | "signature" | "gstRate" | "validityDays" | "gstSlabs">;
+
+const SECTIONS: { title: string; fields: { key: TextKey; label: string; wide?: boolean }[] }[] = [
+  {
+    title: "Organisation",
+    fields: [
+      { key: "name", label: "Company Name" },
+      { key: "tagline", label: "Tagline" },
+      { key: "addressLine1", label: "Address Line 1", wide: true },
+      { key: "addressLine2", label: "Address Line 2", wide: true },
+      { key: "city", label: "City / Town" },
+      { key: "pincode", label: "Pincode" },
+      { key: "phone", label: "Phone" },
+      { key: "altPhone", label: "Alternate Phone" },
+      { key: "email", label: "Email" },
+      { key: "website", label: "Website" },
+      { key: "gstin", label: "GSTIN" },
+      { key: "proprietor", label: "Proprietor / Signatory" }
+    ]
+  },
+  {
+    title: "Bank Details",
+    fields: [
+      { key: "bankName", label: "Bank Name" },
+      { key: "accountNo", label: "Account No" },
+      { key: "ifsc", label: "IFSC Code" },
+      { key: "branch", label: "Branch" }
+    ]
+  },
+  {
+    title: "Quotation Defaults",
+    fields: [
+      { key: "warranty", label: "Product Warranty", wide: true },
+      { key: "transport", label: "Transport Details", wide: true },
+      { key: "deliveryTime", label: "Delivery Time", wide: true },
+      { key: "paymentTerms", label: "Payment Terms", wide: true },
+      { key: "brochureUrl", label: "Brochure Link (shared on leads & quotations)", wide: true }
+    ]
+  }
+];
+
+/** Company information, bank details, quotation defaults and branding artwork. */
+export function SettingsView({
+  settings,
+  users,
+  onChange
+}: {
+  readonly settings: CompanySettings;
+  readonly users: User[];
+  readonly onChange: (settings: CompanySettings) => boolean;
+}) {
+  const toast = useToast();
+  const [form, setForm] = useState<CompanySettings>(settings);
+  const [newSlab, setNewSlab] = useState("");
+
+  function set<K extends keyof CompanySettings>(key: K, value: CompanySettings[K]) {
+    setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function upload(key: "logo" | "signature", file: File | undefined) {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast("Choose an image file (PNG or JPG).", "info");
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      toast(`Image is too large (${Math.round(file.size / 1024)} KB). Use one under ${MAX_IMAGE_BYTES / 1000} KB.`, "info");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUri = String(reader.result);
+      // Base64 inflates the payload ~1.37x; guard the encoded size, which is what gets stored.
+      if (dataUri.length > MAX_IMAGE_BYTES * 1.4) {
+        toast("That image is too large once encoded. Please use a smaller one.", "info");
+        return;
+      }
+      set(key, dataUri);
+    };
+    reader.onerror = () => toast("Could not read that image.", "info");
+    reader.readAsDataURL(file);
+  }
+
+  function save() {
+    const cleaned: CompanySettings = {
+      ...form,
+      gstRate: Math.min(100, Math.max(0, Number(form.gstRate) || 0)),
+      validityDays: Math.max(0, Math.round(Number(form.validityDays) || 0))
+    };
+    const ok = onChange(cleaned);
+    setForm(cleaned);
+    toast(ok ? "Company settings saved" : "Could not save — browser storage is full. Try a smaller logo or signature.", ok ? "success" : "info");
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="inline-flex items-center gap-2 text-sm text-slate-500">
+          <Building2 className="h-4 w-4 text-blue-600" /> These details appear on quotations, invoices and reports.
+        </p>
+        <button onClick={save} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-soft">
+          <Save className="h-4 w-4" /> Save Settings
+        </button>
+      </div>
+
+      {SECTIONS.map((section) => (
+        <Panel key={section.title} title={section.title}>
+          <div className="grid gap-4 md:grid-cols-2">
+            {section.fields.map((field) => (
+              <label key={field.key} className={field.wide ? "text-sm font-semibold text-slate-700 md:col-span-2" : "text-sm font-semibold text-slate-700"}>
+                {field.label}
+                <input
+                  value={form[field.key] ?? ""}
+                  onChange={(event) => set(field.key, event.target.value)}
+                  className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2"
+                />
+              </label>
+            ))}
+            {section.title === "Quotation Defaults" && (
+              <>
+                <label className="text-sm font-semibold text-slate-700">
+                  Default GST Slab (%)
+                  <select
+                    value={form.gstRate}
+                    onChange={(event) => set("gstRate", Number(event.target.value))}
+                    className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2"
+                  >
+                    {(form.gstSlabs ?? []).map((rate) => (
+                      <option key={rate} value={rate}>{rate}%</option>
+                    ))}
+                  </select>
+                  <span className="mt-1 block text-xs font-normal text-slate-500">Used when a product and its brand have no slab set.</span>
+                </label>
+                <label className="text-sm font-semibold text-slate-700">
+                  Quotation Validity (days)
+                  <input
+                    type="number"
+                    value={form.validityDays}
+                    onChange={(event) => set("validityDays", Number(event.target.value))}
+                    className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2"
+                  />
+                </label>
+              </>
+            )}
+          </div>
+        </Panel>
+      ))}
+
+      <Panel title="GST Slabs">
+        <p className="mb-3 text-sm text-slate-500">
+          Slabs available across Brands, Inventory and Quotations. A product uses its own slab, else its brand&apos;s, else the default above.
+        </p>
+        <div className="mb-3 flex flex-wrap gap-2">
+          {(form.gstSlabs ?? []).map((rate) => (
+            <span key={rate} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-semibold text-slate-700">
+              {rate}%
+              <button
+                type="button"
+                aria-label={`Remove ${rate}% slab`}
+                onClick={() => {
+                  const next = (form.gstSlabs ?? []).filter((item) => item !== rate);
+                  set("gstSlabs", next.length ? next : [0]);
+                  if (form.gstRate === rate) set("gstRate", next[0] ?? 0);
+                }}
+                className="text-slate-400 transition hover:text-red-600"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </span>
+          ))}
+          {!(form.gstSlabs ?? []).length && <span className="text-sm text-slate-500">No slabs yet.</span>}
+        </div>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="text-sm font-semibold text-slate-700">
+            Add slab (%)
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={newSlab}
+              onChange={(event) => setNewSlab(event.target.value)}
+              className="mt-2 h-11 w-40 rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => {
+              const rate = Number(newSlab);
+              if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+                toast("Enter a GST percentage between 0 and 100.", "info");
+                return;
+              }
+              if ((form.gstSlabs ?? []).includes(rate)) {
+                toast(`${rate}% is already a slab.`, "info");
+                return;
+              }
+              set("gstSlabs", [...(form.gstSlabs ?? []), rate].sort((a, b) => a - b));
+              setNewSlab("");
+            }}
+            className="inline-flex h-11 items-center gap-2 rounded-lg border border-slate-200 px-4 text-sm font-semibold text-blue-700 hover:border-blue-300"
+          >
+            <Plus className="h-4 w-4" /> Add Slab
+          </button>
+        </div>
+      </Panel>
+
+      <Panel title="Branding">
+        <div className="grid gap-6 md:grid-cols-2">
+          <ImageField label="Company Logo" hint="Printed at the top of every quotation." value={form.logo} onPick={(file) => upload("logo", file)} onClear={() => set("logo", "")} />
+          <ImageField
+            label="Proprietor Signature"
+            hint="Printed above the proprietor name on quotations."
+            value={form.signature}
+            onPick={(file) => upload("signature", file)}
+            onClear={() => set("signature", "")}
+          />
+        </div>
+      </Panel>
+
+      <Panel title="User Management">
+        <p className="mb-3 text-sm text-slate-500">
+          Manage staff and admin accounts in the <span className="font-semibold text-blue-700">Users</span> module.
+        </p>
+        <SimpleRows rows={users.map((user) => [user.name, user.email, `${user.role} · ${user.status}`])} />
+      </Panel>
+    </div>
+  );
+}
+
+function ImageField({
+  label,
+  hint,
+  value,
+  onPick,
+  onClear
+}: {
+  readonly label: string;
+  readonly hint: string;
+  readonly value?: string;
+  readonly onPick: (file: File | undefined) => void;
+  readonly onClear: () => void;
+}) {
+  return (
+    <div>
+      <p className="text-sm font-semibold text-slate-700">{label}</p>
+      <p className="mb-2 text-xs text-slate-500">{hint}</p>
+      <div className="flex items-center gap-4">
+        <div className="grid h-24 w-40 place-items-center overflow-hidden rounded-lg border border-dashed border-slate-300 bg-slate-50">
+          {value ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={value} alt={label} className="max-h-full max-w-full object-contain" />
+          ) : (
+            <span className="text-xs text-slate-500">No image</span>
+          )}
+        </div>
+        <div className="flex flex-col gap-2">
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-blue-700 hover:border-blue-300">
+            <ImageUp className="h-4 w-4" /> Upload
+            <input type="file" accept="image/*" className="hidden" onChange={(event) => onPick(event.target.files?.[0])} />
+          </label>
+          {value && (
+            <button type="button" onClick={onClear} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-500 hover:border-red-300 hover:text-red-600">
+              <Trash2 className="h-4 w-4" /> Remove
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

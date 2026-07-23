@@ -30,7 +30,7 @@ firebase.cmd deploy --only hosting,firestore:rules --project ramps-cube-crm-mvp 
 
 ## Demo Access
 
-The app ships as a time-limited demo. After the cut-off the whole UI locks behind a **"Demo access expired"** screen (login and dashboard both blocked). **Current window: through 21 July 2026 (IST).**
+The app ships as a time-limited demo. After the cut-off the whole UI locks behind a **"Demo access expired"** screen (login and dashboard both blocked). **Current window: through 25 July 2026 (IST).**
 
 - **Hard cut-off** — `NEXT_PUBLIC_DEMO_EXPIRES_AT` (absolute ISO 8601) is inlined into the static build and cannot be changed by the client. When set, it is **authoritative for every client**, regardless of when they first opened the app.
 - **Rolling window** — if no hard cut-off is set, the demo lasts 3 days from the device's first launch (tracked in `localStorage`).
@@ -40,14 +40,14 @@ The window is re-checked every minute, so an open session locks the moment it la
 **To change the demo end date**, update the deadline and redeploy:
 
 ```bash
-# .env.local  →  set the absolute end date, e.g. end of 21 July 2026 (IST)
-NEXT_PUBLIC_DEMO_EXPIRES_AT=2026-07-21T23:59:59+05:30
+# .env.local  →  set the absolute end date, e.g. end of 25 July 2026 (IST)
+NEXT_PUBLIC_DEMO_EXPIRES_AT=2026-07-25T23:59:59+05:30
 
 npm.cmd run build
 firebase.cmd deploy --only hosting --project ramps-cube-crm-mvp --non-interactive
 ```
 
-Demo login: `admin@rampscube.com` / `admin123` (staff: `priya@rampscube.com` / `staff123`).
+Demo login: `admin@rampscube.com` / `admin123`. All modules start empty — staff accounts are created from the **Users** module, and every other module is filled in by the client.
 
 ## Current MVP Scope
 

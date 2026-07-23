@@ -1,7 +1,20 @@
 export type Role = "Admin" | "Staff";
 export type CustomerType = "Dealer" | "Business" | "Retail";
 /** How the customer reached us — replaces the old GST field on the entry form. */
-export type CustomerSourceType = "Walk-in" | "Social Media" | "Just Dial" | "India Mart" | "Amazon" | "Reference";
+export type CustomerSourceType =
+  | "Walk-in"
+  | "Just Dial"
+  | "India Mart"
+  | "Amazon"
+  | "Reference"
+  | "FB"
+  | "Insta"
+  | "Whatsapp"
+  | "Google"
+  | "BBB"
+  | "Technician"
+  | "Sub Dealer"
+  | "Existing Customer";
 /** Product category — sourced from inventory product types. */
 export type ProductType =
   | "Deep Freezer"
@@ -15,7 +28,8 @@ export type ProductType =
   | "Loose Milk Cooler"
   | "Cold Room";
 export type LeadStatus = "New" | "Follow-up" | "Quotation Sent" | "Order Confirmed" | "Closed";
-export type LeadSource = "Walk-in" | "Online" | "Social Media" | "Phone" | "Referral";
+/** Nature of enquiry recorded against a lead. */
+export type LeadSource = "Product Enquiry" | "Price Enquiry" | "Resale Enquiry" | "Service Enquiry" | "Dummy Quotation";
 export type QuotationStatus = "Draft" | "Sent" | "Accepted" | "Rejected";
 export type OrderStatus = "Processing" | "Ready" | "Delivered" | "Cancelled";
 export type ServiceStatus = "Pending" | "In Progress" | "Completed";
@@ -61,10 +75,22 @@ export interface Product {
   /** Purchase invoice date — used as the purchase date in the stock report. */
   invoiceDate: string;
   productType?: ProductType;
+  /** GST slab (%) for this item. Overrides the brand and company defaults. */
+  gstRate?: number;
+  /** Units held / handled in this stock line. Defaults to 1 when unset. */
+  quantity?: number;
+  /** Purchase price (cost we bought the unit at). */
+  purchasePrice?: number;
+  /** Cut-off price — the minimum acceptable selling price. */
+  cutoffPrice?: number;
   /** Net Landing Cost. */
   nlc?: number;
   /** Sale date — presence marks the unit as sold out. */
   saleDate?: string;
+  /** Sale invoice number raised for this unit. */
+  saleInvoiceNo?: string;
+  /** "By Ref" — who referred the sale (Technician, Sub Dealer, …). */
+  referredBy?: string;
   /** Buyer name recorded at sale. */
   soldToName?: string;
   /** Buyer town recorded at sale. */
@@ -84,8 +110,10 @@ export interface Lead {
   phone: string;
   /** Nature of enquiry. */
   source: LeadSource;
-  /** Interested in what. */
-  interestedIn: string;
+  /** Price quoted to the lead. */
+  quotedPrice?: number;
+  /** Legacy free-text interest — no longer captured on the form. */
+  interestedIn?: string;
   description: string;
   status: LeadStatus;
   // Customer-parity fields (all optional on a lead until captured).
@@ -106,8 +134,12 @@ export interface Quotation {
   quotationNumber: string;
   /** Optional external / manual quotation reference number. */
   reference?: string;
+  /** Set when the quotation was auto-generated from a lead (before a customer exists). */
+  leadId?: string;
+  /** Display name to use when there is no linked customer yet (lead-generated quotations). */
+  customerLabel?: string;
   customerId: string;
-  products: { productId: string; quantity: number; price: number }[];
+  products: { productId: string; quantity: number; price: number; gstRate?: number }[];
   subtotal: number;
   discount: number;
   gst: number;
@@ -180,11 +212,14 @@ export interface User {
   department: string;
   status: UserStatus;
   joinedAt: string;
-  /** Demo-only credential. Not a real auth secret. */
-  password: string;
+  /** PBKDF2-SHA256 hash of the password, with its per-user salt. */
+  passwordHash?: string;
+  passwordSalt?: string;
+  /** Legacy plaintext credential — upgraded to a hash on first load, then removed. */
+  password?: string;
 }
 
-export type AttendanceStatus = "Present" | "Absent" | "Half Day" | "Leave" | "Week Off";
+export type AttendanceStatus = "Present" | "Absent" | "Half Day" | "Leave" | "Casual Leave" | "Holiday";
 
 export interface AttendanceRecord {
   /** Stable composite id: `${userId}_${date}`. */
@@ -196,6 +231,54 @@ export interface AttendanceRecord {
   checkIn?: string;
   checkOut?: string;
   note?: string;
+}
+
+/** A product brand the business deals in — managed by the admin in the Brands module. */
+export interface Brand {
+  brandId: string;
+  name: string;
+  /** Default GST slab (%) for this brand. Falls back to the company default when unset. */
+  gstRate?: number;
+  /** Optional notes, e.g. distributor or contact. */
+  remarks?: string;
+  active: boolean;
+  createdAt: string;
+}
+
+/** Organisation profile used across quotations, invoices and reports. */
+export interface CompanySettings {
+  name: string;
+  tagline: string;
+  addressLine1: string;
+  addressLine2: string;
+  city: string;
+  pincode: string;
+  phone: string;
+  altPhone: string;
+  email: string;
+  website: string;
+  gstin: string;
+  /** Proprietor / signatory printed above the signature. */
+  proprietor: string;
+  bankName: string;
+  accountNo: string;
+  ifsc: string;
+  branch: string;
+  /** Data-URI images uploaded in Settings. */
+  logo?: string;
+  signature?: string;
+  // Quotation defaults
+  /** Selectable GST slabs (%) the admin maintains, e.g. 0, 5, 12, 18, 28. */
+  gstSlabs: number[];
+  /** Company default GST slab (%), used when a product and its brand have none. */
+  gstRate: number;
+  validityDays: number;
+  warranty: string;
+  transport: string;
+  deliveryTime: string;
+  paymentTerms: string;
+  /** Brochure link shared with leads / on quotations. */
+  brochureUrl: string;
 }
 
 /** Display label for an inventory item. */

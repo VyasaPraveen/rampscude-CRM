@@ -1,37 +1,51 @@
 "use client";
 
-import { Pencil, Save, UserCheck, UserPlus, X } from "lucide-react";
+import { Pencil, Save, UserCheck, UserPlus } from "lucide-react";
 import { useState } from "react";
-import type { CustomerSourceType, Lead, LeadSource, LeadStatus, Product, ProductType } from "@/types/crm";
-import { Badge, DataTable, DeleteButton } from "@/components/ui";
+import type { Brand, CustomerSourceType, Lead, LeadSource, LeadStatus, Product, ProductType, Quotation } from "@/types/crm";
+import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
-import { CUSTOMER_SOURCE_TYPES, PRODUCT_TYPES, uniqueSorted } from "@/lib/options";
-import { shortDate } from "@/utils/format";
+import { CUSTOMER_SOURCE_TYPES, ENQUIRY_NATURES, PRODUCT_TYPES, uniqueSorted } from "@/lib/options";
+import { currency, shortDate } from "@/utils/format";
 import { cn } from "@/lib/utils";
 
-const SOURCES: LeadSource[] = ["Walk-in", "Online", "Social Media", "Phone", "Referral"];
+const SOURCES: LeadSource[] = ENQUIRY_NATURES;
 const STATUSES: LeadStatus[] = ["New", "Follow-up", "Quotation Sent", "Order Confirmed", "Closed"];
+
+/** Next lead sequence from the max existing number, so deletions never reuse one. */
+function nextLeadSequence(numbers: string[]): number {
+  return (
+    numbers.reduce((max, value) => {
+      const match = /(\d+)\s*$/.exec(value);
+      return match ? Math.max(max, Number(match[1])) : max;
+    }, 0) + 1
+  );
+}
 
 /** Leads from walk-ins, online and social media. Carries full customer fields so a lead can be converted. */
 export function LeadsView({
   leads,
   products,
+  brands,
   query,
   onChange,
-  onConvert
+  onConvert,
+  onCreate
 }: {
   readonly leads: Lead[];
   readonly products: Product[];
+  readonly brands: Brand[];
   readonly query: string;
   readonly onChange: (leads: Lead[]) => void;
-  readonly onConvert: (lead: Lead) => void;
+  readonly onConvert: (lead: Lead, createdQuotation?: Quotation) => void;
+  readonly onCreate: (lead: Lead) => Quotation | undefined;
 }) {
   const toast = useToast();
   const [editing, setEditing] = useState<Lead | null | "new">(null);
   const [source, setSource] = useState<LeadSource | "All">("All");
 
   const rows = leads.filter((item) => {
-    const haystack = `${item.name} ${item.town} ${item.phone} ${item.interestedIn} ${item.productBrand ?? ""} ${item.productModel ?? ""}`.toLowerCase();
+    const haystack = `${item.name} ${item.town} ${item.phone} ${item.productBrand ?? ""} ${item.productModel ?? ""}`.toLowerCase();
     return haystack.includes(query.toLowerCase()) && (source === "All" || item.source === source);
   });
 
@@ -40,6 +54,9 @@ export function LeadsView({
     onChange(exists ? leads.map((item) => (item.leadId === lead.leadId ? lead : item)) : [lead, ...leads]);
     setEditing(null);
     toast(exists ? `Lead updated: ${lead.name}` : `Lead added: ${lead.name}`);
+    const created = exists ? undefined : onCreate(lead); // auto-quotation for brand-new leads
+    // Confirming the order converts the lead into a customer straight away.
+    if (lead.status === "Order Confirmed" && !lead.convertedCustomerId) onConvert(lead, created);
   }
 
   function remove(lead: Lead) {
@@ -66,13 +83,13 @@ export function LeadsView({
         </button>
       </div>
       <DataTable
-        columns={["Name", "Town", "Phone", "Nature", "Interested In", "Status", "Added", "Action"]}
+        columns={["Name", "Town", "Phone", "Nature of Enquiry", "Quoted Price", "Status", "Added", "Action"]}
         rows={rows.map((item) => [
           <span key="n" className="font-semibold text-slate-900">{item.name}</span>,
           item.town || "—",
           item.phone || "—",
           item.source,
-          item.interestedIn || "—",
+          typeof item.quotedPrice === "number" ? currency(item.quotedPrice) : "—",
           <Badge key="s" label={item.convertedCustomerId ? "Order Confirmed" : item.status} />,
           shortDate(item.createdAt),
           <div key="actions" className="flex items-center gap-2">
@@ -94,7 +111,9 @@ export function LeadsView({
           </div>
         ])}
       />
-      {editing !== null && <LeadModal initial={editing === "new" ? null : editing} products={products} onClose={() => setEditing(null)} onSave={save} count={leads.length} />}
+      {editing !== null && (
+        <LeadModal initial={editing === "new" ? null : editing} products={products} brands={brands} onClose={() => setEditing(null)} onSave={save} existingNumbers={leads.map((l) => l.leadNumber)} />
+      )}
     </div>
   );
 }
@@ -110,7 +129,7 @@ type Draft = {
   productType: string;
   sourceType: string;
   source: LeadSource;
-  interestedIn: string;
+  quotedPrice: string;
   description: string;
   status: LeadStatus;
 };
@@ -126,18 +145,32 @@ function toDraft(lead: Lead | null): Draft {
     productModel: lead?.productModel ?? "",
     productType: lead?.productType ?? "",
     sourceType: lead?.sourceType ?? "",
-    source: lead?.source ?? "Walk-in",
-    interestedIn: lead?.interestedIn ?? "",
+    source: lead?.source ?? "Product Enquiry",
+    quotedPrice: typeof lead?.quotedPrice === "number" ? String(lead.quotedPrice) : "",
     description: lead?.description ?? "",
     status: lead?.status ?? "New"
   };
 }
 
-function LeadModal({ initial, products, onClose, onSave, count }: { readonly initial: Lead | null; readonly products: Product[]; readonly onClose: () => void; readonly onSave: (lead: Lead) => void; readonly count: number }) {
+function LeadModal({
+  initial,
+  products,
+  brands,
+  onClose,
+  onSave,
+  existingNumbers
+}: {
+  readonly initial: Lead | null;
+  readonly products: Product[];
+  readonly brands: Brand[];
+  readonly onClose: () => void;
+  readonly onSave: (lead: Lead) => void;
+  readonly existingNumbers: string[];
+}) {
   const [form, setForm] = useState<Draft>(toDraft(initial));
   const [error, setError] = useState("");
 
-  const brandOptions = uniqueSorted([...products.map((p) => p.brand), initial?.productBrand]);
+  const brandOptions = uniqueSorted([...brands.filter((b) => b.active).map((b) => b.name), initial?.productBrand]);
   const modelOptions = uniqueSorted([...products.map((p) => p.model), initial?.productModel]);
 
   function set<K extends keyof Draft>(key: K, value: Draft[K]) {
@@ -150,7 +183,7 @@ function LeadModal({ initial, products, onClose, onSave, count }: { readonly ini
     if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) return setError("Enter a valid email or leave it blank.");
     onSave({
       leadId: initial?.leadId ?? `LEAD-${Date.now()}`,
-      leadNumber: initial?.leadNumber ?? `RC-LEAD-2026-${String(count + 1).padStart(3, "0")}`,
+      leadNumber: initial?.leadNumber ?? `RC-LEAD-2026-${String(nextLeadSequence(existingNumbers)).padStart(3, "0")}`,
       name: form.name.trim(),
       town: form.town.trim(),
       phone: form.phone.trim(),
@@ -161,7 +194,8 @@ function LeadModal({ initial, products, onClose, onSave, count }: { readonly ini
       productType: (form.productType || undefined) as ProductType | undefined,
       sourceType: (form.sourceType || undefined) as CustomerSourceType | undefined,
       source: form.source,
-      interestedIn: form.interestedIn.trim(),
+      quotedPrice: form.quotedPrice.trim() ? Math.max(0, Number(form.quotedPrice) || 0) : undefined,
+      interestedIn: initial?.interestedIn,
       description: form.description.trim(),
       status: form.status,
       convertedCustomerId: initial?.convertedCustomerId,
@@ -170,14 +204,7 @@ function LeadModal({ initial, products, onClose, onSave, count }: { readonly ini
   }
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4">
-      <div className="max-h-[92vh] w-full max-w-2xl overflow-auto rounded-lg bg-white p-6 shadow-2xl">
-        <div className="mb-6 flex items-center justify-between">
-          <h2 className="text-xl font-bold">{initial ? "Edit Lead" : "Add Lead"}</h2>
-          <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 p-2" aria-label="Close">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
+    <Modal title={initial ? "Edit Lead" : "Add Lead"} size="xl" onClose={onClose}>
         <p className="mb-4 text-sm text-slate-500">Only Name and Phone are required. These fields carry over when the lead is converted into a customer.</p>
         <div className="grid gap-4 md:grid-cols-2">
           <Field label="Name *" value={form.name} onChange={(v) => set("name", v)} />
@@ -229,7 +256,7 @@ function LeadModal({ initial, products, onClose, onSave, count }: { readonly ini
               ))}
             </select>
           </label>
-          <Field label="Interested In" value={form.interestedIn} onChange={(v) => set("interestedIn", v)} />
+          <Field label="Quoted Price (₹)" value={form.quotedPrice} onChange={(v) => set("quotedPrice", v)} type="number" />
           <label className="text-sm font-semibold text-slate-700">
             Status
             <select value={form.status} onChange={(e) => set("status", e.target.value as LeadStatus)} className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2">
@@ -250,16 +277,15 @@ function LeadModal({ initial, products, onClose, onSave, count }: { readonly ini
             <Save className="h-4 w-4" /> Save Lead
           </button>
         </div>
-      </div>
-    </div>
+      </Modal>
   );
 }
 
-function Field({ label, value, onChange }: { readonly label: string; readonly value: string; readonly onChange: (value: string) => void }) {
+function Field({ label, value, onChange, type = "text" }: { readonly label: string; readonly value: string; readonly onChange: (value: string) => void; readonly type?: string }) {
   return (
     <label className="text-sm font-semibold text-slate-700">
       {label}
-      <input value={value} onChange={(event) => onChange(event.target.value)} className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" />
+      <input type={type} value={value} onChange={(event) => onChange(event.target.value)} className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" />
     </label>
   );
 }

@@ -1,8 +1,103 @@
 "use client";
 
-import { Trash2 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { Trash2, X } from "lucide-react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+
+const MODAL_WIDTHS = { md: "max-w-lg", lg: "max-w-2xl", xl: "max-w-3xl" } as const;
+
+/**
+ * Accessible dialog: labelled, focus-trapped, closes on Escape or backdrop click,
+ * and returns focus to whatever opened it. Page scroll is locked while open.
+ */
+export function Modal({
+  title,
+  subtitle,
+  size = "lg",
+  onClose,
+  children
+}: {
+  readonly title: string;
+  readonly subtitle?: string;
+  readonly size?: keyof typeof MODAL_WIDTHS;
+  readonly onClose: () => void;
+  readonly children: ReactNode;
+}) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    const { overflow } = document.body.style;
+    document.body.style.overflow = "hidden";
+
+    const focusable = () =>
+      Array.from(
+        panelRef.current?.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        ) ?? []
+      ).filter((element) => element.offsetParent !== null);
+
+    focusable()[0]?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = focusable();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      document.body.style.overflow = overflow;
+      opener?.focus?.();
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className={cn("max-h-[92vh] w-full overflow-auto rounded-lg bg-white p-6 shadow-2xl", MODAL_WIDTHS[size])}
+      >
+        <div className="mb-6 flex items-start justify-between gap-4">
+          <div>
+            <h2 id={titleId} className="text-xl font-bold">
+              {title}
+            </h2>
+            {subtitle && <p className="text-sm text-slate-500">{subtitle}</p>}
+          </div>
+          <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:border-slate-300" aria-label="Close dialog">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
 
 /** Delete button with a two-step inline confirm (arms on first click, auto-disarms after 3s). */
 export function DeleteButton({ onDelete, disabled, title, resetKey }: { readonly onDelete: () => void; readonly disabled?: boolean; readonly title?: string; readonly resetKey?: string | number }) {
@@ -76,7 +171,8 @@ export const statusTone: Record<string, string> = {
   Absent: "bg-red-50 text-red-700 ring-red-200",
   "Half Day": "bg-yellow-50 text-yellow-700 ring-yellow-200",
   Leave: "bg-orange-50 text-orange-700 ring-orange-200",
-  "Week Off": "bg-slate-100 text-slate-500 ring-slate-200",
+  "Casual Leave": "bg-purple-50 text-purple-700 ring-purple-200",
+  "Holiday": "bg-slate-100 text-slate-500 ring-slate-200",
   // Invoice source
   Tally: "bg-indigo-50 text-indigo-700 ring-indigo-200",
   Manual: "bg-slate-100 text-slate-600 ring-slate-200",
@@ -105,7 +201,15 @@ export function Panel({ title, action, children }: { readonly title: string; rea
   );
 }
 
+const PAGE_SIZE = 25;
+
 export function DataTable({ columns, rows }: { readonly columns: string[]; readonly rows: ReactNode[][] }) {
+  const [page, setPage] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  // Filtering can shrink the list below the current page — fall back to the last page.
+  const current = Math.min(page, pageCount - 1);
+  const visible = rows.length > PAGE_SIZE ? rows.slice(current * PAGE_SIZE, current * PAGE_SIZE + PAGE_SIZE) : rows;
+
   return (
     <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-soft">
       <div className="overflow-x-auto">
@@ -120,8 +224,8 @@ export function DataTable({ columns, rows }: { readonly columns: string[]; reado
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {rows.length ? (
-              rows.map((row, rowIndex) => (
+            {visible.length ? (
+              visible.map((row, rowIndex) => (
                 <tr key={rowIndex} className="hover:bg-blue-50/50">
                   {row.map((cell, cellIndex) => (
                     <td key={cellIndex} className="whitespace-nowrap px-4 py-4 text-sm text-slate-700">
@@ -140,6 +244,34 @@ export function DataTable({ columns, rows }: { readonly columns: string[]; reado
           </tbody>
         </table>
       </div>
+      {rows.length > PAGE_SIZE && (
+        <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-4 py-3 text-sm">
+          <span className="text-slate-600">
+            {current * PAGE_SIZE + 1}–{Math.min(rows.length, (current + 1) * PAGE_SIZE)} of {rows.length}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPage(Math.max(0, current - 1))}
+              disabled={current === 0}
+              className="rounded-lg border border-slate-200 px-3 py-1.5 font-semibold text-slate-700 disabled:opacity-40"
+            >
+              Previous
+            </button>
+            <span className="text-slate-600">
+              Page {current + 1} of {pageCount}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPage(Math.min(pageCount - 1, current + 1))}
+              disabled={current >= pageCount - 1}
+              className="rounded-lg border border-slate-200 px-3 py-1.5 font-semibold text-slate-700 disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

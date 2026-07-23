@@ -1,0 +1,145 @@
+"use client";
+
+import { zodResolver } from "@hookform/resolvers/zod";
+import { UserPlus } from "lucide-react";
+import { useForm } from "react-hook-form";
+import { z } from "zod";
+import type { Brand, Customer, Product } from "@/types/crm";
+import { Modal } from "@/components/ui";
+import { CUSTOMER_SOURCE_TYPES, PRODUCT_TYPES, uniqueSorted } from "@/lib/options";
+
+// Only Name and Phone are mandatory; every other customer field is optional.
+export const customerSchema = z.object({
+  customerName: z.string().min(2, "Name is required"),
+  mobile: z.string().min(10, "A valid phone number is required"),
+  city: z.string().optional(),
+  address: z.string().optional(),
+  productModel: z.string().optional(),
+  productBrand: z.string().optional(),
+  productType: z.string().optional(),
+  email: z.string().email("Enter a valid email").optional().or(z.literal("")),
+  sourceType: z.string().optional()
+});
+
+export type CustomerForm = z.infer<typeof customerSchema>;
+
+export function CustomerModal({ initial, products, brands, onClose, onSave }: { initial: Customer | null; products: Product[]; brands: Brand[]; onClose: () => void; onSave: (customer: Customer) => void }) {
+  const {
+    register,
+    handleSubmit,
+    formState: { errors }
+  } = useForm<CustomerForm>({
+    resolver: zodResolver(customerSchema),
+    defaultValues: initial
+      ? {
+          customerName: initial.customerName,
+          mobile: initial.mobile,
+          city: initial.city,
+          address: initial.address,
+          productBrand: initial.productBrand,
+          productModel: initial.productModel,
+          productType: initial.productType ?? "",
+          email: initial.email,
+          sourceType: initial.sourceType ?? ""
+        }
+      : undefined
+  });
+
+  // Brand / model dropdowns are built from the inventory; the current record's own value
+  // is merged in so editing an item whose brand/model is no longer in stock still shows it.
+  const brandOptions = uniqueSorted([...brands.filter((b) => b.active).map((b) => b.name), ...products.map((p) => p.brand), initial?.productBrand]);
+  const modelOptions = uniqueSorted([...products.map((p) => p.model), initial?.productModel]);
+
+  function submit(values: CustomerForm) {
+    onSave({
+      customerId: initial?.customerId ?? `CUST-${Date.now()}`,
+      createdAt: initial?.createdAt ?? new Date().toISOString(),
+      whatsapp: initial?.whatsapp,
+      companyName: initial?.companyName,
+      gst: initial?.gst,
+      customerType: initial?.customerType,
+      remarks: initial?.remarks,
+      customerName: values.customerName,
+      mobile: values.mobile,
+      city: values.city ?? "",
+      address: values.address ?? "",
+      productModel: values.productModel ?? "",
+      productBrand: values.productBrand ?? "",
+      productType: (values.productType || undefined) as Customer["productType"],
+      email: values.email ?? "",
+      sourceType: (values.sourceType || undefined) as Customer["sourceType"]
+    });
+  }
+
+  return (
+    <Modal title={initial ? "Edit Customer" : "Add Customer"} subtitle="Only Name and Phone are required." size="xl" onClose={onClose}>
+      <form onSubmit={handleSubmit(submit)}>
+        <div className="grid gap-4 md:grid-cols-2">
+          <label className="text-sm font-semibold text-slate-700">
+            Name *
+            <input className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("customerName")} />
+            {errors.customerName && <span className="mt-1 block text-xs text-red-600">{errors.customerName.message}</span>}
+          </label>
+          <label className="text-sm font-semibold text-slate-700">
+            Phone Number *
+            <input className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("mobile")} />
+            {errors.mobile && <span className="mt-1 block text-xs text-red-600">{errors.mobile.message}</span>}
+          </label>
+          <label className="text-sm font-semibold text-slate-700">
+            Town
+            <input className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("city")} />
+          </label>
+          <label className="text-sm font-semibold text-slate-700">
+            Address
+            <input className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("address")} />
+          </label>
+          <label className="text-sm font-semibold text-slate-700">
+            Product Brand
+            <select className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("productBrand")}>
+              <option value="">— Select —</option>
+              {brandOptions.map((brand) => (
+                <option key={brand} value={brand}>{brand}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm font-semibold text-slate-700">
+            Product Model
+            <select className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("productModel")}>
+              <option value="">— Select —</option>
+              {modelOptions.map((model) => (
+                <option key={model} value={model}>{model}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm font-semibold text-slate-700">
+            Product Type
+            <select className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("productType")}>
+              <option value="">— Select —</option>
+              {PRODUCT_TYPES.map((type) => (
+                <option key={type} value={type}>{type}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm font-semibold text-slate-700">
+            Mail ID
+            <input className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("email")} />
+            {errors.email && <span className="mt-1 block text-xs text-red-600">{errors.email.message}</span>}
+          </label>
+          <label className="text-sm font-semibold text-slate-700">
+            Type of Customer
+            <select className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("sourceType")}>
+              <option value="">— Select —</option>
+              {CUSTOMER_SOURCE_TYPES.map((type) => (
+                <option key={type} value={type}>{type}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="mt-6 flex justify-end gap-3">
+          <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 px-4 py-2 font-semibold">Cancel</button>
+          <button className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white"><UserPlus className="h-4 w-4" /> Save Customer</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
