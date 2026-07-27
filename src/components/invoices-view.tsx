@@ -156,7 +156,7 @@ export function InvoicesView({ invoices, query, onChange }: { readonly invoices:
       <div className="flex items-start gap-3 rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-slate-600">
         <Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
         <p>
-          <span className="font-semibold text-blue-700">In live production, Tally Sync will be enabled</span> — invoices raised in Tally will flow in automatically. For this demo, export invoices from Tally and use{" "}
+          <span className="font-semibold text-blue-700">Tally Sync</span> — until automatic Tally integration is switched on, export invoices from Tally and use{" "}
           <span className="font-semibold">Import from Tally</span>, or add them manually. Mark each invoice <span className="font-semibold">Created</span> and <span className="font-semibold">Shared</span> as you process it.
         </p>
       </div>

@@ -26,7 +26,7 @@ export const STORAGE_KEYS = {
  * On mismatch every `rc_*` key is cleared, so returning browsers start clean instead
  * of restoring data from a previous build.
  */
-export const DATA_VERSION = "2026-07-23-brands";
+export const DATA_VERSION = "2026-07-27-live";
 
 export function ensureDataVersion(): void {
   if (typeof window === "undefined") return;

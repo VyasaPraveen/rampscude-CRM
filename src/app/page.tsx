@@ -26,6 +26,7 @@ import {
   X
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -46,26 +47,29 @@ import {
 import type { AttendanceRecord, Brand, CompanySettings, Customer, Invoice, Lead, Order, Payment, Product, Quotation, ServiceRequest, User } from "@/types/crm";
 import { cn } from "@/lib/utils";
 import { computeTotals, rateForProduct } from "@/lib/gst";
-import { formatRemaining, getDemoStatus, type DemoStatus } from "@/lib/demo";
-import { DemoBanner, DemoExpiredScreen } from "@/components/demo-gate";
-import { QuotationModal } from "@/components/quotation-modal";
-import { UsersView } from "@/components/users-view";
-import { AttendanceView } from "@/components/attendance-view";
-import { InventoryView } from "@/components/inventory-view";
-import { BrandsView } from "@/components/brands-view";
-import { SettingsView } from "@/components/settings-view";
-import { LeadsView } from "@/components/leads-view";
-import { InvoicesView } from "@/components/invoices-view";
-import { OrdersView } from "@/components/orders-view";
-import { ServicesView } from "@/components/services-view";
-import { PaymentsView } from "@/components/payments-view";
-import { SearchView } from "@/components/search-view";
 import { Dashboard } from "@/components/dashboard-view";
-import { CustomersView } from "@/components/customers-view";
-import { QuotationsView } from "@/components/quotations-view";
-import { ReportsView } from "@/components/reports-view";
-import { CustomerModal } from "@/components/customer-modal";
 import { useToast } from "@/components/toast";
+
+// Each module's view is code-split so it downloads only when its tab is first
+// opened. The Dashboard (default landing) stays eager to avoid a first-paint flash.
+const viewLoading = () => <div className="h-40 animate-pulse rounded-lg border border-slate-200 bg-slate-100" aria-hidden />;
+const SearchView = dynamic(() => import("@/components/search-view").then((m) => m.SearchView), { loading: viewLoading });
+const CustomersView = dynamic(() => import("@/components/customers-view").then((m) => m.CustomersView), { loading: viewLoading });
+const LeadsView = dynamic(() => import("@/components/leads-view").then((m) => m.LeadsView), { loading: viewLoading });
+const InventoryView = dynamic(() => import("@/components/inventory-view").then((m) => m.InventoryView), { loading: viewLoading });
+const BrandsView = dynamic(() => import("@/components/brands-view").then((m) => m.BrandsView), { loading: viewLoading });
+const QuotationsView = dynamic(() => import("@/components/quotations-view").then((m) => m.QuotationsView), { loading: viewLoading });
+const OrdersView = dynamic(() => import("@/components/orders-view").then((m) => m.OrdersView), { loading: viewLoading });
+const InvoicesView = dynamic(() => import("@/components/invoices-view").then((m) => m.InvoicesView), { loading: viewLoading });
+const ServicesView = dynamic(() => import("@/components/services-view").then((m) => m.ServicesView), { loading: viewLoading });
+const AttendanceView = dynamic(() => import("@/components/attendance-view").then((m) => m.AttendanceView), { loading: viewLoading });
+const PaymentsView = dynamic(() => import("@/components/payments-view").then((m) => m.PaymentsView), { loading: viewLoading });
+const UsersView = dynamic(() => import("@/components/users-view").then((m) => m.UsersView), { loading: viewLoading });
+const ReportsView = dynamic(() => import("@/components/reports-view").then((m) => m.ReportsView), { loading: viewLoading });
+const SettingsView = dynamic(() => import("@/components/settings-view").then((m) => m.SettingsView), { loading: viewLoading });
+// Modals load on user action; no skeleton is needed for the brief fetch.
+const QuotationModal = dynamic(() => import("@/components/quotation-modal").then((m) => m.QuotationModal));
+const CustomerModal = dynamic(() => import("@/components/customer-modal").then((m) => m.CustomerModal));
 import { STORAGE_KEYS, ensureDataVersion, loadState, saveState } from "@/lib/storage";
 import { upgradeStoredPasswords, verifyPassword } from "@/lib/password";
 import { onSyncStatus, persist, pushDoc, subscribeWorkspace, type SyncStatus } from "@/lib/sync";
@@ -163,7 +167,6 @@ export default function Page() {
   const currentUserRef = useRef<User | null>(null);
   // Kept in a ref so the mount-only effect never needs `toast` as a dependency.
   const toastRef = useRef(toast);
-  const [demo, setDemo] = useState<DemoStatus | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [activeModule, setActiveModule] = useState<ModuleId>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -231,7 +234,6 @@ export default function Page() {
     setMounted(true);
     // Discard data stored by an earlier build before reading anything back.
     ensureDataVersion();
-    setDemo(getDemoStatus());
     // Local cache first so the UI paints instantly, then Firestore streams the
     // shared workspace over the top and keeps every device in step.
     const cached: Record<string, unknown> = {
@@ -345,11 +347,7 @@ export default function Page() {
       void pushDoc(key, cached[key]); // fresh workspace: publish this device's data
     });
 
-    // Re-check the demo window periodically so an open session locks the moment
-    // it lapses, without a manual refresh.
-    const timer = setInterval(() => setDemo(getDemoStatus()), 60_000);
     return () => {
-      clearInterval(timer);
       unsubscribe();
     };
   }, []);
@@ -597,17 +595,13 @@ export default function Page() {
   const visibleModules = modules.filter((module) => !module.adminOnly || isAdmin);
   const selectedModule = modules.find((module) => module.id === activeModule) ?? modules[0];
 
-  // Avoid a hydration flash before the client resolves demo/auth state.
-  if (!mounted || !demo) {
+  // Avoid a hydration flash before the client resolves auth state.
+  if (!mounted) {
     return <main className="min-h-screen bg-[#F8FAFC]" aria-hidden />;
   }
 
-  if (demo.expired) {
-    return <DemoExpiredScreen status={demo} />;
-  }
-
   if (!currentUser) {
-    return <LoginScreen demo={demo} onLogin={handleLogin} />;
+    return <LoginScreen onLogin={handleLogin} />;
   }
 
   return (
@@ -676,7 +670,6 @@ export default function Page() {
       </aside>
 
       <div className="lg:pl-72">
-        <DemoBanner status={demo} />
         <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 px-4 py-4 backdrop-blur lg:px-8">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex items-center gap-3">
@@ -783,7 +776,7 @@ export default function Page() {
   );
 }
 
-function LoginScreen({ demo, onLogin }: { demo: DemoStatus; onLogin: (values: z.infer<typeof loginSchema>) => Promise<{ ok: boolean; error?: string }> }) {
+function LoginScreen({ onLogin }: { onLogin: (values: z.infer<typeof loginSchema>) => Promise<{ ok: boolean; error?: string }> }) {
   const [authError, setAuthError] = useState("");
   const {
     register,
@@ -806,7 +799,6 @@ function LoginScreen({ demo, onLogin }: { demo: DemoStatus; onLogin: (values: z.
           onSubmit={handleSubmit(submit)}
           className="w-full max-w-md overflow-hidden rounded-lg border border-slate-200 bg-white shadow-soft"
         >
-          <DemoBanner status={demo} />
           <div className="p-8">
           <div className="mb-8 flex items-center gap-3">
             <div className="grid h-12 w-12 place-items-center rounded-lg bg-blue-600 text-white">
@@ -826,9 +818,8 @@ function LoginScreen({ demo, onLogin }: { demo: DemoStatus; onLogin: (values: z.
           {authError && <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{authError}</p>}
           <button className="mt-4 h-12 w-full rounded-lg bg-blue-600 font-semibold text-white shadow-soft">Sign in</button>
           <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-slate-600">
-            <p className="font-semibold text-blue-700">Evaluation access</p>
-            <p className="mt-1">Sign in with the administrator account issued to you. Staff accounts are created from the Users module.</p>
-            <p className="mt-1 text-xs text-slate-500">{formatRemaining(demo)}.</p>
+            <p className="font-semibold text-blue-700">Staff sign in</p>
+            <p className="mt-1">Use the account issued to you. Additional staff accounts are created from the Users module by an administrator.</p>
           </div>
           </div>
         </form>

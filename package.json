@@ -12,7 +12,6 @@
   "dependencies": {
     "@hookform/resolvers": "^5.1.1",
     "clsx": "^2.1.1",
-    "firebase": "^11.10.0",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",
     "lucide-react": "^0.468.0",

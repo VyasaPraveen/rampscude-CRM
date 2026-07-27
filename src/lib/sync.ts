@@ -1,31 +1,43 @@
-import { doc, onSnapshot, setDoc } from "firebase/firestore";
-import { ensureSignedIn, getFirebase, isFirebaseConfigured } from "@/lib/firebase";
 import { saveState } from "@/lib/storage";
 
 /**
- * Cross-device sync.
+ * Cross-device sync — self-hosted.
  *
- * Every module's list is mirrored to a single Firestore document under
- * `workspace/{storageKey}`, holding the collection as a JSON string. Storing JSON
- * (rather than native arrays) sidesteps Firestore's rejection of `undefined`
- * fields and its nested-array restriction, and keeps the existing array-shaped
- * state in the app untouched.
+ * Every module's list is mirrored to a single row in the `crm_workspace` table
+ * on the application's own server, holding the collection as a JSON string. A
+ * small PHP endpoint (`/api.php`) reads and upserts those rows; this module is
+ * the browser-side client for it.
+ *
+ * There is no realtime push channel, so remote changes are picked up by polling
+ * the endpoint every {@link POLL_INTERVAL_MS}. A change made on one device is
+ * therefore visible on another within that window.
  *
  * Writes are last-write-wins per module: two people editing *different* modules
  * never conflict, but simultaneous edits to the same module resolve to whoever
  * saved last. That is an accepted trade-off for this deployment.
  */
 
-const COLLECTION = "workspace";
+/** Endpoint that serves and stores the workspace. Same-origin by default. */
+const API_URL = process.env.NEXT_PUBLIC_SYNC_API_URL || "/api.php";
+/** Shared bearer token the endpoint requires. Sync is disabled without it. */
+const API_TOKEN = process.env.NEXT_PUBLIC_SYNC_TOKEN || "";
 
-/** Firestore caps a document at 1 MiB; stay clear of it and warn before writes fail. */
-const MAX_DOC_BYTES = 900_000;
+/** How often to poll the server for changes made on other devices. */
+const POLL_INTERVAL_MS = 8_000;
+
+/** Guard against an accidentally huge module blowing up the request. */
+const MAX_DOC_BYTES = 4_000_000;
 
 export type SyncStatus = "disabled" | "connecting" | "live" | "error";
 
 type Listener = (status: SyncStatus, detail?: string) => void;
 
-let status: SyncStatus = isFirebaseConfigured() ? "connecting" : "disabled";
+/** Whether the build has a sync endpoint token baked in. */
+function isSyncConfigured(): boolean {
+  return Boolean(API_TOKEN);
+}
+
+let status: SyncStatus = isSyncConfigured() ? "connecting" : "disabled";
 const listeners = new Set<Listener>();
 
 function setStatus(next: SyncStatus, detail?: string) {
@@ -45,87 +57,105 @@ export function onSyncStatus(listener: Listener): () => void {
   return () => listeners.delete(listener);
 }
 
-/** True when the app can talk to Firestore at all. */
+/** True when the app can talk to the sync server at all. */
 export function isSyncAvailable(): boolean {
-  return isFirebaseConfigured() && getFirebase() !== null;
+  return typeof window !== "undefined" && isSyncConfigured();
+}
+
+interface WorkspaceResponse {
+  now: number;
+  modules: Record<string, { payload: string; updatedAt: number }>;
+}
+
+/** Fetch modules changed since `since` (0 fetches everything). */
+async function fetchWorkspace(since: number): Promise<WorkspaceResponse> {
+  const res = await fetch(`${API_URL}?since=${since}`, {
+    headers: { Authorization: `Bearer ${API_TOKEN}` },
+    cache: "no-store"
+  });
+  if (!res.ok) throw new Error(`sync GET ${res.status}`);
+  return (await res.json()) as WorkspaceResponse;
 }
 
 /**
- * Subscribe to every synced document. `onDoc` fires with the parsed payload each
- * time a document changes — locally or on another device. Returns an unsubscribe.
+ * Subscribe to every synced document. `onDoc` fires with the parsed payload for
+ * each module that changes — on load and whenever a poll finds a newer version
+ * (edited here or on another device). Returns an unsubscribe.
  *
- * `onMissing` fires only for a document that genuinely does not exist on the
- * server, so this device can publish its data into a fresh workspace.
+ * `onMissing` fires once, at startup, for any requested key the server has no
+ * row for — so this device can publish its data into a fresh workspace.
  */
 export function subscribeWorkspace(
   keys: string[],
   onDoc: (key: string, value: unknown) => void,
   onMissing?: (key: string) => void
 ): () => void {
-  const fb = getFirebase();
-  if (!fb) {
+  if (!isSyncAvailable()) {
     setStatus("disabled");
     return () => {};
   }
 
-  const unsubscribers: (() => void)[] = [];
   let cancelled = false;
-  let liveKeys = 0;
+  let lastNow = 0;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const emit = (key: string, payload: string) => {
+    try {
+      onDoc(key, JSON.parse(payload));
+    } catch {
+      // Corrupt payload — keep whatever the app already has.
+    }
+  };
 
   setStatus("connecting");
 
-  void ensureSignedIn().then((ok) => {
+  const poll = async (initial: boolean) => {
     if (cancelled) return;
-    if (!ok) {
-      // Sign-in failed: the app keeps working locally, but must not claim to be synced.
-      setStatus("error", "Could not sign in to the sync service.");
-      return;
+    try {
+      const data = await fetchWorkspace(initial ? 0 : lastNow);
+      if (cancelled) return;
+      lastNow = data.now ?? lastNow;
+
+      if (initial) {
+        keys.forEach((key) => {
+          const mod = data.modules[key];
+          if (mod) emit(key, mod.payload);
+          else onMissing?.(key);
+        });
+      } else {
+        Object.entries(data.modules).forEach(([key, mod]) => emit(key, mod.payload));
+      }
+      if (status !== "live") setStatus("live");
+    } catch (error) {
+      if (!cancelled) setStatus("error", error instanceof Error ? error.message : "Sync unavailable.");
+    } finally {
+      if (!cancelled) timer = setTimeout(() => void poll(false), POLL_INTERVAL_MS);
     }
-    keys.forEach((key) => {
-      const unsubscribe = onSnapshot(
-        doc(fb.db, COLLECTION, key),
-        (snapshot) => {
-          // Only a server-confirmed snapshot proves the connection is live.
-          if (!snapshot.metadata.fromCache) {
-            liveKeys += 1;
-            if (status !== "live") setStatus("live");
-          }
-          const raw = snapshot.data()?.json;
-          if (typeof raw === "string") {
-            try {
-              onDoc(key, JSON.parse(raw));
-            } catch {
-              // Corrupt payload — keep whatever the app already has.
-            }
-          } else if (!snapshot.exists() && !snapshot.metadata.fromCache) {
-            onMissing?.(key);
-          }
-        },
-        (error) => {
-          if (liveKeys === 0) setStatus("error", error.message);
-        }
-      );
-      unsubscribers.push(unsubscribe);
-    });
-  });
+  };
+
+  void poll(true);
 
   return () => {
     cancelled = true;
-    unsubscribers.forEach((fn) => fn());
+    if (timer) clearTimeout(timer);
   };
 }
 
 export type PushResult = "ok" | "skipped" | "too-large" | "failed";
 
-/** Push a module's data to Firestore. */
+/** Push a module's data to the server. */
 export async function pushDoc(key: string, value: unknown): Promise<PushResult> {
-  const fb = getFirebase();
-  if (!fb) return "skipped";
-  const json = JSON.stringify(value);
-  if (json.length > MAX_DOC_BYTES) return "too-large";
+  if (!isSyncAvailable()) return "skipped";
+  const payload = JSON.stringify(value);
+  if (payload.length > MAX_DOC_BYTES) return "too-large";
   try {
-    if (!(await ensureSignedIn())) return "failed";
-    await setDoc(doc(fb.db, COLLECTION, key), { json, updatedAt: Date.now() });
+    const res = await fetch(API_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${API_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ key, payload }),
+      cache: "no-store"
+    });
+    if (!res.ok) return "failed";
     if (status !== "live") setStatus("live");
     return "ok";
   } catch {
@@ -136,14 +166,14 @@ export async function pushDoc(key: string, value: unknown): Promise<PushResult> 
 export interface PersistResult {
   /** Whether the local cache write succeeded. */
   local: boolean;
-  /** Resolves once the cloud write settles. */
+  /** Resolves once the server write settles. */
   cloud: Promise<PushResult>;
 }
 
 /**
  * Save a module's data: writes the local cache immediately (so the UI survives a
- * reload even offline) and mirrors to Firestore. Callers should surface a cloud
- * failure rather than reporting an unqualified success.
+ * reload even offline) and mirrors to the server. Callers should surface a
+ * server failure rather than reporting an unqualified success.
  */
 export function persist<T>(key: string, value: T): PersistResult {
   const local = saveState(key, value);
