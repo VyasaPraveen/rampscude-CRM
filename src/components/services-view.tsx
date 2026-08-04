@@ -1,20 +1,39 @@
 "use client";
 
-import { Pencil, Plus, Save } from "lucide-react";
+import { Headphones, Mail, MessageCircle, Pencil, Phone, Plus, Save, Share2 } from "lucide-react";
 import { useState } from "react";
-import type { Customer, ServiceRequest, ServiceStatus } from "@/types/crm";
-import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
+import type { Brand, Customer, ServiceRequest, ServiceStatus } from "@/types/crm";
+import { Badge, DataTable, DeleteButton, Modal, Panel } from "@/components/ui";
 import { useToast } from "@/components/toast";
+import { whatsappLink } from "@/lib/export";
 
 const STATUSES: ServiceStatus[] = ["Pending", "In Progress", "Completed"];
 
-export function ServicesView({ services, customers, query, onChange }: { readonly services: ServiceRequest[]; readonly customers: Customer[]; readonly query: string; readonly onChange: (services: ServiceRequest[]) => void }) {
+export function ServicesView({ services, customers, brands, query, onChange }: { readonly services: ServiceRequest[]; readonly customers: Customer[]; readonly brands: Brand[]; readonly query: string; readonly onChange: (services: ServiceRequest[]) => void }) {
   const toast = useToast();
   const [editing, setEditing] = useState<ServiceRequest | null | "new">(null);
+  const [shareCustomerId, setShareCustomerId] = useState("");
   const nameOf = (id: string) => {
     const c = customers.find((item) => item.customerId === id);
     return c ? c.companyName || c.customerName : id;
   };
+
+  // Brands that have at least one service contact to share.
+  const serviceBrands = brands.filter((b) => b.serviceCareNumber || b.serviceWhatsapp || b.serviceEmail);
+
+  function shareBrand(brand: Brand) {
+    const lines = [
+      `*${brand.name} — Service Support*`,
+      brand.serviceCareNumber ? `Customer Care: ${brand.serviceCareNumber}` : "",
+      brand.serviceWhatsapp ? `WhatsApp: ${brand.serviceWhatsapp}` : "",
+      brand.serviceEmail ? `Email: ${brand.serviceEmail}` : ""
+    ].filter(Boolean);
+    const customer = customers.find((c) => c.customerId === shareCustomerId);
+    const phone = (customer?.whatsapp || customer?.mobile || "").replace(/\D/g, "");
+    // With a customer chosen we target their number; otherwise wa.me opens the chooser.
+    const url = phone ? whatsappLink(phone, lines.join("\n")) : `https://wa.me/?text=${encodeURIComponent(lines.join("\n"))}`;
+    window.open(url, "_blank", "noopener");
+  }
 
   const rows = services.filter((item) => `${item.serviceNumber} ${nameOf(item.customerId)} ${item.product}`.toLowerCase().includes(query.toLowerCase()));
 
@@ -32,6 +51,49 @@ export function ServicesView({ services, customers, query, onChange }: { readonl
 
   return (
     <div className="space-y-4">
+      <Panel
+        title="Brand Service Contacts"
+        action={
+          <label className="flex items-center gap-2 text-sm font-medium text-slate-600">
+            Share to
+            <select value={shareCustomerId} onChange={(e) => setShareCustomerId(e.target.value)} className="h-9 rounded-lg border border-slate-200 px-2 text-sm outline-none ring-blue-500 focus:ring-2">
+              <option value="">Choose in WhatsApp</option>
+              {customers.map((c) => (
+                <option key={c.customerId} value={c.customerId}>{c.companyName || c.customerName}</option>
+              ))}
+            </select>
+          </label>
+        }
+      >
+        {serviceBrands.length === 0 ? (
+          <p className="text-sm text-slate-500">
+            No brand service contacts yet. Add Customer Care / WhatsApp / Email to a brand in the <span className="font-semibold text-blue-700">Brands</span> module.
+          </p>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {serviceBrands.map((brand) => (
+              <div key={brand.brandId} className="rounded-lg border border-slate-200 p-4">
+                <div className="mb-2 flex items-center gap-2 font-semibold text-slate-900">
+                  <Headphones className="h-4 w-4 text-blue-600" /> {brand.name}
+                </div>
+                <div className="space-y-1 text-sm text-slate-600">
+                  {brand.serviceCareNumber && <p className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 text-slate-400" /> {brand.serviceCareNumber}</p>}
+                  {brand.serviceWhatsapp && <p className="flex items-center gap-2"><MessageCircle className="h-3.5 w-3.5 text-slate-400" /> {brand.serviceWhatsapp}</p>}
+                  {brand.serviceEmail && <p className="flex items-center gap-2"><Mail className="h-3.5 w-3.5 text-slate-400" /> {brand.serviceEmail}</p>}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => shareBrand(brand)}
+                  className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-green-200 px-3 py-2 text-sm font-semibold text-green-700 hover:border-green-300"
+                >
+                  <Share2 className="h-4 w-4" /> Share on WhatsApp
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
+
       <div className="flex justify-end">
         <button onClick={() => setEditing("new")} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-soft">
           <Plus className="h-4 w-4" /> New Service

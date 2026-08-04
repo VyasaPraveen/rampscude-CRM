@@ -5,11 +5,12 @@ import { useState } from "react";
 import type { CompanySettings, User } from "@/types/crm";
 import { Panel, SimpleRows } from "@/components/ui";
 import { useToast } from "@/components/toast";
+import { CustomFieldManager } from "@/components/custom-fields";
 
 /** Max size for an uploaded logo / signature. Kept small — images are stored inline. */
 const MAX_IMAGE_BYTES = 400_000;
 
-type TextKey = Exclude<keyof CompanySettings, "logo" | "signature" | "gstRate" | "validityDays" | "gstSlabs">;
+type TextKey = Exclude<keyof CompanySettings, "logo" | "signature" | "gstRate" | "validityDays" | "gstSlabs" | "leadFields" | "customerFields">;
 
 const SECTIONS: { title: string; fields: { key: TextKey; label: string; wide?: boolean }[] }[] = [
   {
@@ -225,6 +226,14 @@ export function SettingsView({
             onPick={(file) => upload("signature", file)}
             onClear={() => set("signature", "")}
           />
+        </div>
+      </Panel>
+
+      <Panel title="Custom Fields">
+        <p className="mb-3 text-sm text-slate-500">Add your own fields to the Lead and Customer forms — text, number, date or dropdown. They appear on those forms for every record.</p>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <CustomFieldManager title="Lead fields" defs={form.leadFields} onChange={(defs) => set("leadFields", defs)} />
+          <CustomFieldManager title="Customer fields" defs={form.customerFields} onChange={(defs) => set("customerFields", defs)} />
         </div>
       </Panel>
 

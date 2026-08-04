@@ -398,6 +398,30 @@ export default function Page() {
     toast(`${customer.customerName} removed`, "info");
   }
 
+  /** Bulk-add imported customers, skipping any whose phone already exists (no duplicates). */
+  function importCustomers(rows: Customer[]) {
+    const existingPhones = new Set(customerList.map((c) => c.mobile.replace(/\D/g, "")).filter(Boolean));
+    const fresh: Customer[] = [];
+    let skipped = 0;
+    rows.forEach((row) => {
+      const phone = row.mobile.replace(/\D/g, "");
+      if (phone && existingPhones.has(phone)) {
+        skipped += 1;
+        return;
+      }
+      if (phone) existingPhones.add(phone);
+      fresh.push(row);
+    });
+    if (fresh.length === 0) {
+      toast(`No new customers — ${skipped} already present.`, "info");
+      return;
+    }
+    const next = [...fresh, ...customerList];
+    setCustomerList(next);
+    store(STORAGE_KEYS.customers, next);
+    toast(`Imported ${fresh.length} customer${fresh.length === 1 ? "" : "s"}${skipped ? ` · ${skipped} duplicate${skipped === 1 ? "" : "s"} skipped` : ""}`);
+  }
+
   function updateInventory(next: Product[]) {
     setInventory(next);
     store(STORAGE_KEYS.inventory, next);
@@ -740,9 +764,9 @@ export default function Page() {
           )}
           {activeModule === "dashboard" && <Dashboard customers={customerList} quotations={quotationList} leads={leadList} invoices={invoiceList} payments={paymentList} services={serviceList} />}
           {activeModule === "search" && <SearchView customers={customerList} products={inventory} leads={leadList} />}
-          {activeModule === "customers" && <CustomersView customers={customerList} query={globalSearch} onEdit={(customer) => setEditingCustomer(customer)} onDelete={deleteCustomer} />}
+          {activeModule === "customers" && <CustomersView customers={customerList} query={globalSearch} onEdit={(customer) => setEditingCustomer(customer)} onDelete={deleteCustomer} onImport={importCustomers} />}
           {activeModule === "leads" && (
-            <LeadsView leads={leadList} products={inventory} brands={brandList} query={globalSearch} onChange={updateLeads} onConvert={convertLead} onCreate={createQuotationFromLead} />
+            <LeadsView leads={leadList} products={inventory} brands={brandList} customFields={settings.leadFields} query={globalSearch} onChange={updateLeads} onConvert={convertLead} onCreate={createQuotationFromLead} />
           )}
           {activeModule === "inventory" && <InventoryView products={inventory} brands={brandList} settings={settings} query={globalSearch} onChange={updateInventory} />}
           {activeModule === "brands" && isAdmin && <BrandsView brands={brandList} products={inventory} settings={settings} query={globalSearch} onChange={updateBrands} />}
@@ -761,7 +785,7 @@ export default function Page() {
           )}
           {activeModule === "orders" && <OrdersView orders={orderList} customers={customerList} query={globalSearch} onChange={updateOrders} />}
           {activeModule === "invoices" && <InvoicesView invoices={invoiceList} customers={customerList} brands={brandList} settings={settings} query={globalSearch} onChange={updateInvoices} />}
-          {activeModule === "services" && <ServicesView services={serviceList} customers={customerList} query={globalSearch} onChange={updateServices} />}
+          {activeModule === "services" && <ServicesView services={serviceList} customers={customerList} brands={brandList} query={globalSearch} onChange={updateServices} />}
           {activeModule === "attendance" && <AttendanceView users={userList} records={attendance} onChange={updateAttendance} />}
           {activeModule === "payments" && <PaymentsView payments={paymentList} customers={customerList} query={globalSearch} onChange={updatePayments} />}
           {activeModule === "users" && isAdmin && <UsersView users={userList} currentUserId={currentUser.id} onChange={updateUsers} />}
@@ -771,7 +795,7 @@ export default function Page() {
       </div>
 
       {editingCustomer !== null && (
-        <CustomerModal initial={editingCustomer === "new" ? null : editingCustomer} products={inventory} brands={brandList} onClose={() => setEditingCustomer(null)} onSave={saveCustomer} />
+        <CustomerModal initial={editingCustomer === "new" ? null : editingCustomer} products={inventory} brands={brandList} customFields={settings.customerFields} onClose={() => setEditingCustomer(null)} onSave={saveCustomer} />
       )}
 
       {editingQuotation !== null && (

@@ -79,6 +79,8 @@ export interface Customer {
   remarks?: string;
   /** Purchases with payment tracking — repeat buys live here, no duplicate customer. */
   purchases?: Purchase[];
+  /** Values for admin-defined custom fields, keyed by field id. */
+  custom?: Record<string, string>;
   createdAt: string;
 }
 
@@ -148,6 +150,8 @@ export interface Lead {
   sourceType?: CustomerSourceType;
   /** Set once the lead has been converted into a customer. */
   convertedCustomerId?: string;
+  /** Values for admin-defined custom fields, keyed by field id. */
+  custom?: Record<string, string>;
   createdAt: string;
 }
 
@@ -283,8 +287,22 @@ export interface Brand {
   gstRate?: number;
   /** Optional notes, e.g. distributor or contact. */
   remarks?: string;
+  /** Brand service-support contacts, shared with customers from the Services module. */
+  serviceCareNumber?: string;
+  serviceWhatsapp?: string;
+  serviceEmail?: string;
   active: boolean;
   createdAt: string;
+}
+
+/** An admin-defined extra field on a Lead or Customer. */
+export type CustomFieldType = "text" | "number" | "date" | "select";
+export interface CustomFieldDef {
+  id: string;
+  label: string;
+  type: CustomFieldType;
+  /** Choices for a "select" field. */
+  options?: string[];
 }
 
 /** Organisation profile used across quotations, invoices and reports. */
@@ -321,6 +339,9 @@ export interface CompanySettings {
   paymentTerms: string;
   /** Brochure link shared with leads / on quotations. */
   brochureUrl: string;
+  /** Admin-defined custom fields shown on the Lead and Customer forms. */
+  leadFields?: CustomFieldDef[];
+  customerFields?: CustomFieldDef[];
 }
 
 /** Display label for an inventory item. */

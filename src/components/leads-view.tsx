@@ -2,9 +2,10 @@
 
 import { Link as LinkIcon, Pencil, Save, UserCheck, UserPlus } from "lucide-react";
 import { useState } from "react";
-import type { Brand, CustomerSourceType, Lead, LeadSource, LeadStatus, Product, ProductType, Quotation } from "@/types/crm";
+import type { Brand, CustomFieldDef, CustomerSourceType, Lead, LeadSource, LeadStatus, Product, ProductType, Quotation } from "@/types/crm";
 import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
+import { CustomFieldInputs } from "@/components/custom-fields";
 import { whatsappLink } from "@/lib/export";
 import { CUSTOMER_SOURCE_TYPES, ENQUIRY_NATURES, PRODUCT_TYPES, uniqueSorted } from "@/lib/options";
 import { currency, shortDate } from "@/utils/format";
@@ -28,6 +29,7 @@ export function LeadsView({
   leads,
   products,
   brands,
+  customFields,
   query,
   onChange,
   onConvert,
@@ -36,6 +38,7 @@ export function LeadsView({
   readonly leads: Lead[];
   readonly products: Product[];
   readonly brands: Brand[];
+  readonly customFields?: CustomFieldDef[];
   readonly query: string;
   readonly onChange: (leads: Lead[]) => void;
   readonly onConvert: (lead: Lead, createdQuotation?: Quotation) => void;
@@ -136,7 +139,7 @@ export function LeadsView({
         ])}
       />
       {editing !== null && (
-        <LeadModal initial={editing === "new" ? null : editing} products={products} brands={brands} onClose={() => setEditing(null)} onSave={save} existingNumbers={leads.map((l) => l.leadNumber)} />
+        <LeadModal initial={editing === "new" ? null : editing} products={products} brands={brands} customFields={customFields} onClose={() => setEditing(null)} onSave={save} existingNumbers={leads.map((l) => l.leadNumber)} />
       )}
     </div>
   );
@@ -182,6 +185,7 @@ function LeadModal({
   initial,
   products,
   brands,
+  customFields,
   onClose,
   onSave,
   existingNumbers
@@ -189,11 +193,13 @@ function LeadModal({
   readonly initial: Lead | null;
   readonly products: Product[];
   readonly brands: Brand[];
+  readonly customFields?: CustomFieldDef[];
   readonly onClose: () => void;
   readonly onSave: (lead: Lead) => void;
   readonly existingNumbers: string[];
 }) {
   const [form, setForm] = useState<Draft>(toDraft(initial));
+  const [custom, setCustom] = useState<Record<string, string>>(initial?.custom ?? {});
   const [error, setError] = useState("");
 
   const brandOptions = uniqueSorted([...brands.filter((b) => b.active).map((b) => b.name), initial?.productBrand]);
@@ -226,6 +232,7 @@ function LeadModal({
       description: form.description.trim(),
       status: form.status,
       convertedCustomerId: initial?.convertedCustomerId,
+      custom: Object.keys(custom).length ? custom : undefined,
       createdAt: initial?.createdAt ?? new Date().toISOString()
     });
   }
@@ -285,6 +292,7 @@ function LeadModal({
           </label>
           <Field label="Quoted Price (₹, incl. GST)" value={form.quotedPrice} onChange={(v) => set("quotedPrice", v)} type="number" />
           <Field label="Brochure Link" value={form.brochureUrl} onChange={(v) => set("brochureUrl", v)} />
+          <CustomFieldInputs defs={customFields} values={custom} onChange={(id, value) => setCustom((c) => ({ ...c, [id]: value }))} />
           <label className="text-sm font-semibold text-slate-700">
             Status
             <select value={form.status} onChange={(e) => set("status", e.target.value as LeadStatus)} className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2">

@@ -5,8 +5,9 @@ import { Plus, Trash2, UserPlus } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import type { Brand, Customer, PaymentMode, Product, Purchase } from "@/types/crm";
+import type { Brand, CustomFieldDef, Customer, PaymentMode, Product, Purchase } from "@/types/crm";
 import { Modal } from "@/components/ui";
+import { CustomFieldInputs } from "@/components/custom-fields";
 import { CUSTOMER_SOURCE_TYPES, PRODUCT_TYPES, uniqueSorted } from "@/lib/options";
 import { purchaseBalance } from "@/lib/orders";
 import { currency } from "@/utils/format";
@@ -28,7 +29,7 @@ export const customerSchema = z.object({
 
 export type CustomerForm = z.infer<typeof customerSchema>;
 
-export function CustomerModal({ initial, products, brands, onClose, onSave }: { initial: Customer | null; products: Product[]; brands: Brand[]; onClose: () => void; onSave: (customer: Customer) => void }) {
+export function CustomerModal({ initial, products, brands, customFields, onClose, onSave }: { initial: Customer | null; products: Product[]; brands: Brand[]; customFields?: CustomFieldDef[]; onClose: () => void; onSave: (customer: Customer) => void }) {
   const {
     register,
     handleSubmit,
@@ -56,6 +57,7 @@ export function CustomerModal({ initial, products, brands, onClose, onSave }: { 
   const modelOptions = uniqueSorted([...products.map((p) => p.model), initial?.productModel]);
 
   const [purchases, setPurchases] = useState<Purchase[]>(initial?.purchases ?? []);
+  const [custom, setCustom] = useState<Record<string, string>>(initial?.custom ?? {});
 
   function addPurchase() {
     setPurchases((current) => [
@@ -98,7 +100,8 @@ export function CustomerModal({ initial, products, brands, onClose, onSave }: { 
       email: values.email ?? "",
       sourceType: (values.sourceType || undefined) as Customer["sourceType"],
       // Drop blank rows (no price and no advance) so an empty line is never saved.
-      purchases: purchases.filter((p) => (p.price || 0) > 0 || (p.advancePaid || 0) > 0)
+      purchases: purchases.filter((p) => (p.price || 0) > 0 || (p.advancePaid || 0) > 0),
+      custom: Object.keys(custom).length ? custom : undefined
     });
   }
 
@@ -165,6 +168,7 @@ export function CustomerModal({ initial, products, brands, onClose, onSave }: { 
               ))}
             </select>
           </label>
+          <CustomFieldInputs defs={customFields} values={custom} onChange={(id, value) => setCustom((c) => ({ ...c, [id]: value }))} />
         </div>
 
         <div className="mt-8">

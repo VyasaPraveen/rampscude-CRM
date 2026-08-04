@@ -99,6 +99,9 @@ function BrandModal({ initial, settings, onClose, onSave }: { readonly initial: 
   const [name, setName] = useState(initial?.name ?? "");
   const [gstRate, setGstRate] = useState<string>(typeof initial?.gstRate === "number" ? String(initial.gstRate) : "");
   const [remarks, setRemarks] = useState(initial?.remarks ?? "");
+  const [careNumber, setCareNumber] = useState(initial?.serviceCareNumber ?? "");
+  const [whatsapp, setWhatsapp] = useState(initial?.serviceWhatsapp ?? "");
+  const [serviceEmail, setServiceEmail] = useState(initial?.serviceEmail ?? "");
   const [active, setActive] = useState(initial?.active ?? true);
   const [error, setError] = useState("");
 
@@ -109,6 +112,9 @@ function BrandModal({ initial, settings, onClose, onSave }: { readonly initial: 
       name: name.trim(),
       gstRate: gstRate === "" ? undefined : Number(gstRate),
       remarks: remarks.trim() || undefined,
+      serviceCareNumber: careNumber.trim() || undefined,
+      serviceWhatsapp: whatsapp.trim() || undefined,
+      serviceEmail: serviceEmail.trim() || undefined,
       active,
       createdAt: initial?.createdAt ?? new Date().toISOString()
     });
@@ -147,6 +153,23 @@ function BrandModal({ initial, settings, onClose, onSave }: { readonly initial: 
               className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2"
             />
           </label>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Service Contacts (shared with customers)</p>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="text-xs font-semibold text-slate-600">
+                Customer Care No.
+                <input value={careNumber} onChange={(e) => setCareNumber(e.target.value)} className="mt-1 h-10 w-full rounded-lg border border-slate-200 px-2 text-sm font-normal outline-none ring-blue-500 focus:ring-2" />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                WhatsApp No.
+                <input value={whatsapp} onChange={(e) => setWhatsapp(e.target.value)} className="mt-1 h-10 w-full rounded-lg border border-slate-200 px-2 text-sm font-normal outline-none ring-blue-500 focus:ring-2" />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Email ID
+                <input value={serviceEmail} onChange={(e) => setServiceEmail(e.target.value)} className="mt-1 h-10 w-full rounded-lg border border-slate-200 px-2 text-sm font-normal outline-none ring-blue-500 focus:ring-2" />
+              </label>
+            </div>
+          </div>
           <label className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
             <input type="checkbox" checked={active} onChange={(event) => setActive(event.target.checked)} className="h-4 w-4 rounded border-slate-300" />
             Active
