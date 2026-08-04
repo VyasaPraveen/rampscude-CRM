@@ -477,8 +477,14 @@ export async function downloadInvoicePdf(invoice: Invoice, settings: CompanySett
 /** Trigger a client-side CSV download. First row is treated as the header. */
 export function downloadCSV(filename: string, rows: (string | number)[][]): void {
   const escape = (cell: string | number) => {
+    // Numbers are safe as-is (keeps negatives numeric for analysis).
+    if (typeof cell === "number") return String(cell);
     const text = String(cell ?? "");
-    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    // Neutralise spreadsheet formula injection: a text cell starting with = + - @
+    // (or a leading tab / CR) is prefixed with ' so Excel/Sheets treat it as text,
+    // never executing it as a formula on whoever opens the export.
+    const guarded = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+    return /[",\n]/.test(guarded) ? `"${guarded.replace(/"/g, '""')}"` : guarded;
   };
   const csv = rows.map((row) => row.map(escape).join(",")).join("\r\n");
   const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });

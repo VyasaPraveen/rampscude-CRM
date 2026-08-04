@@ -71,8 +71,9 @@ export function SettingsView({
 
   function upload(key: "logo" | "signature", file: File | undefined) {
     if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      toast("Choose an image file (PNG or JPG).", "info");
+    // Raster images only. SVG is an image type but can embed script, so it is refused.
+    if (!file.type.startsWith("image/") || file.type === "image/svg+xml") {
+      toast("Choose a PNG or JPG image (SVG is not allowed).", "info");
       return;
     }
     if (file.size > MAX_IMAGE_BYTES) {

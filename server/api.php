@@ -15,6 +15,11 @@
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
+// Hardening: never MIME-sniff the JSON, never leak the URL as a referrer, and make
+// clear this endpoint is not meant to be framed.
+header('X-Content-Type-Options: nosniff');
+header('Referrer-Policy: no-referrer');
+header('X-Frame-Options: DENY');
 
 // Config lives in the account home, above every web root, so it is never served.
 $configPath = '/home/u852408598/crm-sync-config.php';
