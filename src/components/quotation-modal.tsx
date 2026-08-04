@@ -58,17 +58,23 @@ export function QuotationModal({
   const [brochureUrl, setBrochureUrl] = useState(quotation?.brochureUrl ?? "");
   const [status, setStatus] = useState<QuotationStatus>(quotation?.status ?? "Draft");
   const [discount, setDiscount] = useState<number>(quotation?.discount ?? 0);
+
+  // Build the opening line item from a lead: match its brand + model (then brand only)
+  // to a stock product and carry over the price the lead was quoted.
+  function lineItemsForLead(id: string): LineItem[] {
+    const lead = leads.find((l) => l.leadId === id);
+    const matched = lead
+      ? products.find((p) => p.brand === lead.productBrand && p.model === lead.productModel) ??
+        products.find((p) => Boolean(lead.productBrand) && p.brand === lead.productBrand)
+      : undefined;
+    const base = matched ?? products[0];
+    if (!base) return [{ productId: "", quantity: 1, price: 0, gstRate: settings.gstRate }];
+    const price = lead && typeof lead.quotedPrice === "number" && lead.quotedPrice > 0 ? lead.quotedPrice : base.price;
+    return [{ productId: base.productId, quantity: 1, price, gstRate: rateForProduct(base, brands, settings) }];
+  }
+
   const [items, setItems] = useState<LineItem[]>(
-    quotation?.products.length
-      ? quotation.products.map((line) => ({ ...line }))
-      : [
-          {
-            productId: products[0]?.productId ?? "",
-            quantity: 1,
-            price: products[0]?.price ?? 0,
-            gstRate: products[0] ? rateForProduct(products[0], brands, settings) : settings.gstRate
-          }
-        ]
+    quotation?.products.length ? quotation.products.map((line) => ({ ...line })) : lineItemsForLead(initialLeadId)
   );
   const [error, setError] = useState("");
 
@@ -149,7 +155,12 @@ export function QuotationModal({
             Lead
             <select
               value={leadId}
-              onChange={(event) => setLeadId(event.target.value)}
+              onChange={(event) => {
+                const value = event.target.value;
+                setLeadId(value);
+                // Auto-fetch the lead's product/price into the line for a new quotation.
+                if (!isEdit) setItems(lineItemsForLead(value));
+              }}
               className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2"
             >
               <option value="">— Select a lead —</option>

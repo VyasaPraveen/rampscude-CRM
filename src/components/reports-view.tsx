@@ -142,9 +142,14 @@ export function ReportsView(props: { customers: Customer[]; products: Product[];
             blank()
           );
 
+        // Margin % per month (profit ÷ amount), shown in the header like the reference sheet.
+        const marginPct = (list: Product[]) => {
+          const c = cell(list);
+          return c.amount ? `${((c.profit / c.amount) * 100).toFixed(2)}%` : "";
+        };
         const header1: (string | number)[] = [`${year} Jan-Dec`];
-        monthNames.forEach((m) => header1.push(m, "", ""));
-        header1.push("Total", "", "", "Margin %");
+        monthNames.forEach((m, month) => header1.push(m, "", marginPct(sold.filter((p) => saleMonth(p) === month))));
+        header1.push("Total", "", marginPct(sold), "Margin %");
 
         const header2: (string | number)[] = ["Sales code"];
         monthNames.forEach(() => header2.push("Quantity", "Amount", "Profit/Loss"));
