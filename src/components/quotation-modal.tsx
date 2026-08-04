@@ -10,7 +10,7 @@ import { computeTotals, rateForProduct } from "@/lib/gst";
 
 const STATUSES: QuotationStatus[] = ["Draft", "Sent", "Accepted", "Rejected"];
 
-type LineItem = { productId: string; quantity: number; price: number; gstRate?: number };
+type LineItem = { productId: string; quantity: number; price: number; gstRate?: number; label?: string };
 
 function nextQuotationNumber(existing: Quotation[]): string {
   // Use the max existing sequence (not the count) so deletions never reuse a number.
@@ -60,17 +60,27 @@ export function QuotationModal({
   const [discount, setDiscount] = useState<number>(quotation?.discount ?? 0);
 
   // Build the opening line item from a lead: match its brand + model (then brand only)
-  // to a stock product and carry over the price the lead was quoted.
+  // to a stock product and carry over the quoted price. When the lead's product is not
+  // in inventory, still show it as a labelled line so the quotation reflects the lead.
   function lineItemsForLead(id: string): LineItem[] {
     const lead = leads.find((l) => l.leadId === id);
+    const quoted = lead && typeof lead.quotedPrice === "number" && lead.quotedPrice > 0 ? lead.quotedPrice : undefined;
     const matched = lead
       ? products.find((p) => p.brand === lead.productBrand && p.model === lead.productModel) ??
         products.find((p) => Boolean(lead.productBrand) && p.brand === lead.productBrand)
       : undefined;
-    const base = matched ?? products[0];
-    if (!base) return [{ productId: "", quantity: 1, price: 0, gstRate: settings.gstRate }];
-    const price = lead && typeof lead.quotedPrice === "number" && lead.quotedPrice > 0 ? lead.quotedPrice : base.price;
-    return [{ productId: base.productId, quantity: 1, price, gstRate: rateForProduct(base, brands, settings) }];
+    if (matched) {
+      return [{ productId: matched.productId, quantity: 1, price: quoted ?? matched.price, gstRate: rateForProduct(matched, brands, settings) }];
+    }
+    // Lead product not in stock — carry the lead's brand/model as a labelled line.
+    const label = lead ? [lead.productBrand, lead.productModel].filter(Boolean).join(" ").trim() : "";
+    if (lead && label) {
+      const brand = brands.find((b) => b.name === lead.productBrand);
+      return [{ productId: `LEAD:${label}`, label, quantity: 1, price: quoted ?? 0, gstRate: brand?.gstRate ?? settings.gstRate }];
+    }
+    const base = products[0];
+    if (!base) return [{ productId: "", quantity: 1, price: quoted ?? 0, gstRate: settings.gstRate }];
+    return [{ productId: base.productId, quantity: 1, price: quoted ?? base.price, gstRate: rateForProduct(base, brands, settings) }];
   }
 
   const [items, setItems] = useState<LineItem[]>(
@@ -98,7 +108,10 @@ export function QuotationModal({
 
   function setProduct(index: number, productId: string) {
     const product = products.find((p) => p.productId === productId);
-    updateItem(index, { productId, price: product?.price ?? 0, gstRate: rateForProduct(product, brands, settings) });
+    // Choosing a real stock item fills its price/GST and drops any lead label; the
+    // synthetic lead option keeps its carried price and label.
+    if (product) updateItem(index, { productId, label: undefined, price: product.price, gstRate: rateForProduct(product, brands, settings) });
+    else updateItem(index, { productId });
   }
 
   function addItem() {
@@ -225,6 +238,9 @@ export function QuotationModal({
                     className="mt-1 h-10 w-full rounded-lg border border-slate-200 px-2 text-sm font-normal outline-none ring-blue-500 focus:ring-2"
                   >
                     <option value="">— Select a product —</option>
+                    {item.label && !products.some((p) => p.productId === item.productId) && (
+                      <option value={item.productId}>{item.label} (from lead)</option>
+                    )}
                     {products.map((product) => (
                       <option key={product.productId} value={product.productId}>
                         {productLabel(product)}

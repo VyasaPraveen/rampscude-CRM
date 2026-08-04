@@ -165,7 +165,7 @@ export interface Quotation {
   /** Display name to use when there is no linked customer yet (lead-generated quotations). */
   customerLabel?: string;
   customerId: string;
-  products: { productId: string; quantity: number; price: number; gstRate?: number }[];
+  products: { productId: string; quantity: number; price: number; gstRate?: number; label?: string }[];
   /** Net (ex-GST) taxable value. Line prices are GST-inclusive. */
   subtotal: number;
   discount: number;

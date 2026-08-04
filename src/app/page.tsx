@@ -471,13 +471,20 @@ export default function Page() {
     const product =
       inventory.find((p) => p.brand === lead.productBrand && p.model === lead.productModel) ??
       inventory.find((p) => p.brand === lead.productBrand && lead.productBrand);
-    if (!product) return undefined; // no matching stock — nothing to quote yet
-    // Honour the price the user actually quoted on the lead (GST-inclusive); fall
-    // back to the stock sale price only when no quoted price was entered.
-    const price = typeof lead.quotedPrice === "number" && lead.quotedPrice > 0 ? lead.quotedPrice : product.price;
-    const gstRate = rateForProduct(product, brandList, settings);
-    const line = { productId: product.productId, quantity: 1, price, gstRate };
-    const { taxable, gst, total } = computeTotals([line], 0, () => gstRate);
+    const quoted = typeof lead.quotedPrice === "number" && lead.quotedPrice > 0 ? lead.quotedPrice : undefined;
+    const label = [lead.productBrand, lead.productModel].filter(Boolean).join(" ").trim();
+    // Prefer a matching stock item; otherwise carry the lead's product as a labelled
+    // line (needs a quoted price, since there is no stock price to fall back on).
+    let line: { productId: string; quantity: number; price: number; gstRate?: number; label?: string };
+    if (product) {
+      line = { productId: product.productId, quantity: 1, price: quoted ?? product.price, gstRate: rateForProduct(product, brandList, settings) };
+    } else if (label && quoted) {
+      const brand = brandList.find((b) => b.name === lead.productBrand);
+      line = { productId: `LEAD:${label}`, label, quantity: 1, price: quoted, gstRate: brand?.gstRate ?? settings.gstRate };
+    } else {
+      return undefined; // nothing concrete to quote yet
+    }
+    const { taxable, gst, total } = computeTotals([line], 0, () => line.gstRate ?? settings.gstRate);
     const quotation: Quotation = {
       quotationId: `QUO-${Date.now()}`,
       quotationNumber: `RC/QTN/2026/${String(nextNumber(quotationList.map((q) => q.quotationNumber))).padStart(3, "0")}`,

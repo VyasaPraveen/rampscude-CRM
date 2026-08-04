@@ -12,9 +12,9 @@ function rs(value: number): string {
   return `Rs. ${inr(value)}`;
 }
 
-function productName(products: Product[], productId: string): string {
-  const product = products.find((item) => item.productId === productId);
-  return product ? productLabel(product) : productId;
+function productName(products: Product[], line: { productId: string; label?: string }): string {
+  const product = products.find((item) => item.productId === line.productId);
+  return product ? productLabel(product) : line.label || line.productId;
 }
 
 /** Who a quotation is addressed to — built from either a lead or a customer. */
@@ -58,7 +58,7 @@ export function quotationMessage(
   settings: CompanySettings
 ): string {
   const lines = quotation.products.map(
-    (item) => `• ${productName(products, item.productId)} x${item.quantity} — ₹${inr(item.price * item.quantity)}`
+    (item) => `• ${productName(products, item)} x${item.quantity} — ₹${inr(item.price * item.quantity)}`
   );
   const split = totalsForQuotation(quotation, settings);
   const brochure = quotation.brochureUrl || settings.brochureUrl;
@@ -201,7 +201,7 @@ export async function downloadQuotationPdf(
   y += 26;
   doc.text("Dear sir/Madam", marginX, y);
 
-  const first = quotation.products[0] ? productName(products, quotation.products[0].productId) : "your requirement";
+  const first = quotation.products[0] ? productName(products, quotation.products[0]) : "your requirement";
   const subject = quotation.products.length > 1 ? `${first} and others` : first;
   doc.setFont("helvetica", "bold");
   doc.text(`Sub:- Quotation for ${subject}.`, marginX, (y += 22));
@@ -212,7 +212,7 @@ export async function downloadQuotationPdf(
     head: [["SL.NO.", "Description", "QTY", "RATE", "GST %", "TOTAL"]],
     body: quotation.products.map((item, index) => [
       String(index + 1).padStart(2, "0"),
-      productName(products, item.productId),
+      productName(products, item),
       String(item.quantity),
       rs(item.price),
       `${item.gstRate ?? settings.gstRate}%`,
