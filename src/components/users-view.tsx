@@ -72,6 +72,17 @@ export function UsersView({
     toast(`${user.name} removed`, "info");
   }
 
+  function removeMany(ids: string[]) {
+    // Never remove the signed-in account, even if it was selected.
+    const set = new Set(ids.filter((id) => id !== currentUserId));
+    if (set.size === 0) {
+      toast("You cannot remove your own account.", "info");
+      return;
+    }
+    onChange(users.filter((item) => !set.has(item.id)));
+    toast(`${set.size} user${set.size === 1 ? "" : "s"} removed`, "info");
+  }
+
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-3">
@@ -91,6 +102,8 @@ export function UsersView({
 
       <DataTable
         columns={["Name", "Email", "Phone", "Role", "Department", "Status", "Actions"]}
+        rowIds={users.map((user) => user.id)}
+        onDeleteSelected={removeMany}
         rows={users.map((user) => [
           <span key="n" className="font-semibold text-slate-900">
             {user.name}

@@ -71,6 +71,12 @@ export function LeadsView({
     toast(`Lead removed: ${lead.name}`, "info");
   }
 
+  function removeMany(ids: string[]) {
+    const set = new Set(ids);
+    onChange(leads.filter((item) => !set.has(item.leadId)));
+    toast(`${ids.length} lead${ids.length === 1 ? "" : "s"} removed`, "info");
+  }
+
   function shareBrochure(lead: Lead) {
     if (!lead.brochureUrl) {
       toast("Add a brochure link on this lead first.", "info");
@@ -104,6 +110,8 @@ export function LeadsView({
       </div>
       <DataTable
         columns={["Name", "Town", "Phone", "Nature of Enquiry", "Quoted Price", "Status", "Added", "Action"]}
+        rowIds={rows.map((item) => item.leadId)}
+        onDeleteSelected={removeMany}
         rows={rows.map((item) => [
           <span key="n" className="font-semibold text-slate-900">{item.name}</span>,
           item.town || "—",

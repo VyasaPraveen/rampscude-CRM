@@ -41,6 +41,12 @@ export function InventoryView({
     toast(`${product.brand} ${product.model} removed`, "info");
   }
 
+  function removeMany(ids: string[]) {
+    const set = new Set(ids);
+    onChange(products.filter((item) => !set.has(item.productId)));
+    toast(`${ids.length} item${ids.length === 1 ? "" : "s"} removed`, "info");
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -51,6 +57,8 @@ export function InventoryView({
       </div>
       <DataTable
         columns={["Brand", "Model", "Type", "Qty", "Purchase", "Sale", "Status", "Action"]}
+        rowIds={rows.map((item) => item.productId)}
+        onDeleteSelected={removeMany}
         rows={rows.map((item) => [
           <span key="b" className="font-semibold text-slate-900">{item.brand}</span>,
           item.model,

@@ -36,6 +36,12 @@ export function PaymentsView({ payments, customers, query, onChange }: { readonl
     toast(`Payment ${payment.invoiceNumber} removed`, "info");
   }
 
+  function removeMany(ids: string[]) {
+    const set = new Set(ids);
+    onChange(payments.filter((item) => !set.has(item.paymentId)));
+    toast(`${ids.length} payment${ids.length === 1 ? "" : "s"} removed`, "info");
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -46,6 +52,8 @@ export function PaymentsView({ payments, customers, query, onChange }: { readonl
       </div>
       <DataTable
         columns={["Invoice", "Customer", "Amount", "Paid", "Balance", "Status", "Action"]}
+        rowIds={rows.map((item) => item.paymentId)}
+        onDeleteSelected={removeMany}
         rows={rows.map((item) => [
           <span key="i" className="font-semibold text-slate-900">{item.invoiceNumber}</span>,
           nameOf(item.customerId),

@@ -49,6 +49,12 @@ export function ServicesView({ services, customers, brands, query, onChange }: {
     toast(`${service.serviceNumber} removed`, "info");
   }
 
+  function removeMany(ids: string[]) {
+    const set = new Set(ids);
+    onChange(services.filter((item) => !set.has(item.serviceId)));
+    toast(`${ids.length} service${ids.length === 1 ? "" : "s"} removed`, "info");
+  }
+
   return (
     <div className="space-y-4">
       <Panel
@@ -101,6 +107,8 @@ export function ServicesView({ services, customers, brands, query, onChange }: {
       </div>
       <DataTable
         columns={["Service", "Customer", "Product", "Complaint", "Technician", "Status", "Action"]}
+        rowIds={rows.map((item) => item.serviceId)}
+        onDeleteSelected={removeMany}
         rows={rows.map((item) => [
           <span key="s" className="font-semibold text-slate-900">{item.serviceNumber}</span>,
           nameOf(item.customerId),

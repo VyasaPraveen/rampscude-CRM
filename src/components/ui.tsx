@@ -203,19 +203,145 @@ export function Panel({ title, action, children }: { readonly title: string; rea
 
 const PAGE_SIZE = 25;
 
-export function DataTable({ columns, rows }: { readonly columns: string[]; readonly rows: ReactNode[][] }) {
+/** Checkbox that supports the tri-state "indeterminate" look (some-but-not-all selected). */
+function TriCheckbox({ checked, indeterminate, onChange, label }: { readonly checked: boolean; readonly indeterminate?: boolean; readonly onChange: () => void; readonly label: string }) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = Boolean(indeterminate) && !checked;
+  }, [indeterminate, checked]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={checked}
+      onChange={onChange}
+      aria-label={label}
+      className="h-4 w-4 cursor-pointer rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+    />
+  );
+}
+
+/**
+ * Paginated table. Passing `rowIds` (aligned 1:1 with `rows`) together with
+ * `onDeleteSelected` turns on bulk selection: a checkbox column, a select-all
+ * header and a two-step "Delete selected" bar. Ids are stable per record, so a
+ * selection survives filtering/paging and never targets the wrong row.
+ */
+export function DataTable({
+  columns,
+  rows,
+  rowIds,
+  onDeleteSelected
+}: {
+  readonly columns: string[];
+  readonly rows: ReactNode[][];
+  readonly rowIds?: string[];
+  readonly onDeleteSelected?: (ids: string[]) => void;
+}) {
+  const bulk = Boolean(rowIds && onDeleteSelected);
+  const allIds = rowIds ?? [];
   const [page, setPage] = useState(0);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [armed, setArmed] = useState(false);
+
+  // Drop selections whose rows are no longer present (e.g. filtered out), so a
+  // confirm can never delete a record the user can no longer see.
+  useEffect(() => {
+    if (!rowIds) return;
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const present = new Set(rowIds);
+      const next = new Set<string>();
+      prev.forEach((id) => {
+        if (present.has(id)) next.add(id);
+      });
+      return next.size === prev.size ? prev : next;
+    });
+  }, [rowIds]);
+
+  // Auto-disarm the delete confirm after a few seconds.
+  useEffect(() => {
+    if (!armed) return;
+    const timer = setTimeout(() => setArmed(false), 3000);
+    return () => clearTimeout(timer);
+  }, [armed]);
+
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   // Filtering can shrink the list below the current page — fall back to the last page.
   const current = Math.min(page, pageCount - 1);
-  const visible = rows.length > PAGE_SIZE ? rows.slice(current * PAGE_SIZE, current * PAGE_SIZE + PAGE_SIZE) : rows;
+  const start = rows.length > PAGE_SIZE ? current * PAGE_SIZE : 0;
+  const visible = rows.length > PAGE_SIZE ? rows.slice(start, start + PAGE_SIZE) : rows;
+  const visibleIds = bulk ? (rows.length > PAGE_SIZE ? allIds.slice(start, start + PAGE_SIZE) : allIds) : [];
+
+  const allSelected = allIds.length > 0 && selected.size === allIds.length;
+  const colSpan = columns.length + (bulk ? 1 : 0);
+
+  function toggleOne(id: string) {
+    setArmed(false);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    setArmed(false);
+    setSelected((prev) => (prev.size === allIds.length ? new Set() : new Set(allIds)));
+  }
+
+  function clearSelection() {
+    setArmed(false);
+    setSelected(new Set());
+  }
+
+  function deleteSelected() {
+    if (!onDeleteSelected || selected.size === 0) return;
+    if (armed) {
+      onDeleteSelected(Array.from(selected));
+      setSelected(new Set());
+      setArmed(false);
+    } else {
+      setArmed(true);
+    }
+  }
 
   return (
     <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-soft">
+      {bulk && selected.size > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-blue-50 px-4 py-2.5 text-sm">
+          <span className="font-semibold text-slate-700">{selected.size} selected</span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={clearSelection}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:border-slate-300"
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              onClick={deleteSelected}
+              className={cn(
+                "inline-flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs font-semibold transition",
+                armed ? "border-red-600 bg-red-600 text-white" : "border-red-200 bg-white text-red-600 hover:border-red-300"
+              )}
+            >
+              <Trash2 className="h-3.5 w-3.5" /> {armed ? `Confirm — delete ${selected.size}?` : "Delete selected"}
+            </button>
+          </div>
+        </div>
+      )}
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-slate-200">
           <thead className="bg-slate-50">
             <tr>
+              {bulk && (
+                <th className="w-10 px-4 py-3 text-left">
+                  <TriCheckbox checked={allSelected} indeterminate={selected.size > 0} onChange={toggleAll} label="Select all rows" />
+                </th>
+              )}
               {columns.map((column) => (
                 <th key={column} className="whitespace-nowrap px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">
                   {column}
@@ -225,18 +351,27 @@ export function DataTable({ columns, rows }: { readonly columns: string[]; reado
           </thead>
           <tbody className="divide-y divide-slate-100">
             {visible.length ? (
-              visible.map((row, rowIndex) => (
-                <tr key={rowIndex} className="hover:bg-blue-50/50">
-                  {row.map((cell, cellIndex) => (
-                    <td key={cellIndex} className="whitespace-nowrap px-4 py-4 text-sm text-slate-700">
-                      {cell}
-                    </td>
-                  ))}
-                </tr>
-              ))
+              visible.map((row, rowIndex) => {
+                const id = visibleIds[rowIndex];
+                const checked = bulk ? selected.has(id) : false;
+                return (
+                  <tr key={bulk ? id : rowIndex} className={cn("hover:bg-blue-50/50", checked && "bg-blue-50/60")}>
+                    {bulk && (
+                      <td className="w-10 px-4 py-4">
+                        <TriCheckbox checked={checked} onChange={() => toggleOne(id)} label="Select row" />
+                      </td>
+                    )}
+                    {row.map((cell, cellIndex) => (
+                      <td key={cellIndex} className="whitespace-nowrap px-4 py-4 text-sm text-slate-700">
+                        {cell}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })
             ) : (
               <tr>
-                <td className="px-4 py-10 text-center text-sm text-slate-500" colSpan={columns.length}>
+                <td className="px-4 py-10 text-center text-sm text-slate-500" colSpan={colSpan}>
                   No records found
                 </td>
               </tr>

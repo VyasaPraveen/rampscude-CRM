@@ -48,6 +48,21 @@ export function BrandsView({
     toast(`${brand.name} removed`, "info");
   }
 
+  function removeMany(ids: string[]) {
+    const set = new Set(ids);
+    // A brand still used by inventory can't be deleted — skip those and report it.
+    const blocked = brands.filter((item) => set.has(item.brandId) && stockCount(item.name) > 0);
+    const removable = brands.filter((item) => set.has(item.brandId) && stockCount(item.name) === 0);
+    if (removable.length === 0) {
+      toast("Selected brands are still used by inventory — remove those items first.", "info");
+      return;
+    }
+    const removableIds = new Set(removable.map((item) => item.brandId));
+    onChange(brands.filter((item) => !removableIds.has(item.brandId)));
+    const kept = blocked.length ? ` · ${blocked.length} kept (in use)` : "";
+    toast(`${removable.length} brand${removable.length === 1 ? "" : "s"} removed${kept}`, "info");
+  }
+
   function toggle(brand: Brand) {
     onChange(brands.map((item) => (item.brandId === brand.brandId ? { ...item, active: !item.active } : item)));
     toast(`${brand.name} ${brand.active ? "deactivated" : "activated"}`);
@@ -65,6 +80,8 @@ export function BrandsView({
       </div>
       <DataTable
         columns={["Brand", "GST %", "Remarks", "In Stock", "Status", "Action"]}
+        rowIds={rows.map((item) => item.brandId)}
+        onDeleteSelected={removeMany}
         rows={rows.map((item) => [
           <span key="n" className="inline-flex items-center gap-2 font-semibold text-slate-900">
             <Tag className="h-4 w-4 text-blue-600" /> {item.name}

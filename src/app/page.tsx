@@ -398,6 +398,15 @@ export default function Page() {
     toast(`${customer.customerName} removed`, "info");
   }
 
+  function deleteCustomers(ids: string[]) {
+    const set = new Set(ids);
+    const next = customerList.filter((item) => !set.has(item.customerId));
+    const removed = customerList.length - next.length;
+    setCustomerList(next);
+    store(STORAGE_KEYS.customers, next);
+    toast(`${removed} customer${removed === 1 ? "" : "s"} removed`, "info");
+  }
+
   /** Bulk-add imported customers, skipping any whose phone already exists (no duplicates). */
   function importCustomers(rows: Customer[]) {
     const existingPhones = new Set(customerList.map((c) => c.mobile.replace(/\D/g, "")).filter(Boolean));
@@ -618,6 +627,15 @@ export default function Page() {
     toast(`${quotation.quotationNumber} removed`, "info");
   }
 
+  function deleteQuotations(ids: string[]) {
+    const set = new Set(ids);
+    const next = quotationList.filter((item) => !set.has(item.quotationId));
+    const removed = quotationList.length - next.length;
+    setQuotationList(next);
+    store(STORAGE_KEYS.quotations, next);
+    toast(`${removed} quotation${removed === 1 ? "" : "s"} removed`, "info");
+  }
+
   function updateUsers(next: User[]) {
     setUserList(next);
     store(STORAGE_KEYS.users, next);
@@ -771,7 +789,7 @@ export default function Page() {
           )}
           {activeModule === "dashboard" && <Dashboard customers={customerList} quotations={quotationList} leads={leadList} invoices={invoiceList} payments={paymentList} services={serviceList} />}
           {activeModule === "search" && <SearchView customers={customerList} products={inventory} leads={leadList} />}
-          {activeModule === "customers" && <CustomersView customers={customerList} query={globalSearch} onEdit={(customer) => setEditingCustomer(customer)} onDelete={deleteCustomer} onImport={importCustomers} />}
+          {activeModule === "customers" && <CustomersView customers={customerList} query={globalSearch} onEdit={(customer) => setEditingCustomer(customer)} onDelete={deleteCustomer} onDeleteMany={deleteCustomers} onImport={importCustomers} />}
           {activeModule === "leads" && (
             <LeadsView leads={leadList} products={inventory} brands={brandList} customFields={settings.leadFields} query={globalSearch} onChange={updateLeads} onConvert={convertLead} onCreate={createQuotationFromLead} />
           )}
@@ -788,6 +806,7 @@ export default function Page() {
               onEdit={(quotation) => setEditingQuotation(quotation)}
               onNew={() => setEditingQuotation("new")}
               onDelete={deleteQuotation}
+              onDeleteMany={deleteQuotations}
             />
           )}
           {activeModule === "orders" && <OrdersView orders={orderList} customers={customerList} query={globalSearch} onChange={updateOrders} />}

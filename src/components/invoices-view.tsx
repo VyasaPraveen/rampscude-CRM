@@ -196,6 +196,12 @@ export function InvoicesView({
     toast(`Invoice ${invoice.invoiceNumber} removed`, "info");
   }
 
+  function removeMany(ids: string[]) {
+    const set = new Set(ids);
+    onChange(invoices.filter((item) => !set.has(item.invoiceId)));
+    toast(`${ids.length} invoice${ids.length === 1 ? "" : "s"} removed`, "info");
+  }
+
   async function pdf(invoice: Invoice) {
     try {
       await downloadInvoicePdf(invoice, settings);
@@ -298,6 +304,8 @@ export function InvoicesView({
 
       <DataTable
         columns={["Invoice", "Customer", "Town", "Date", "Amount", "Source", "Created", "Shared", "PDF", "Action"]}
+        rowIds={rows.map((item) => item.invoiceId)}
+        onDeleteSelected={removeMany}
         rows={rows.map((item) => [
           <span key="n" className="font-semibold text-slate-900">{item.invoiceNumber}</span>,
           item.customerName,

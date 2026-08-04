@@ -34,6 +34,12 @@ export function OrdersView({ orders, customers, query, onChange }: { readonly or
     toast(`${order.orderNumber} removed`, "info");
   }
 
+  function removeMany(ids: string[]) {
+    const set = new Set(ids);
+    onChange(orders.filter((item) => !set.has(item.orderId)));
+    toast(`${ids.length} order${ids.length === 1 ? "" : "s"} removed`, "info");
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
@@ -43,6 +49,8 @@ export function OrdersView({ orders, customers, query, onChange }: { readonly or
       </div>
       <DataTable
         columns={["Order", "Customer", "Product", "Amount", "Advance", "Balance", "Delivery", "Payment", "Status", "Action"]}
+        rowIds={rows.map((item) => item.orderId)}
+        onDeleteSelected={removeMany}
         rows={rows.map((item) => [
           <span key="o" className="font-semibold text-slate-900">{item.orderNumber}</span>,
           nameOf(item.customerId),

@@ -23,7 +23,8 @@ export function QuotationsView({
   query,
   onEdit,
   onNew,
-  onDelete
+  onDelete,
+  onDeleteMany
 }: {
   quotations: Quotation[];
   customers: Customer[];
@@ -34,6 +35,7 @@ export function QuotationsView({
   onEdit: (quotation: Quotation) => void;
   onNew: () => void;
   onDelete: (quotation: Quotation) => void;
+  onDeleteMany: (ids: string[]) => void;
 }) {
   const toast = useToast();
   const customerOf = (customerId: string) => customers.find((item) => item.customerId === customerId);
@@ -98,6 +100,8 @@ export function QuotationsView({
       </div>
       <DataTable
         columns={["Quotation", "Reference", "Lead / Customer", "Net", "GST", "Total", "Status", "Actions"]}
+        rowIds={rows.map((item) => item.quotationId)}
+        onDeleteSelected={onDeleteMany}
         rows={rows.map((item) => [
           item.quotationNumber,
           item.reference || "—",

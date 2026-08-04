@@ -46,7 +46,7 @@ function customersFromCSV(rows: string[][]): Customer[] {
     .filter((c) => c.customerName || c.mobile);
 }
 
-export function CustomersView({ customers, query, onEdit, onDelete, onImport }: { customers: Customer[]; query: string; onEdit: (customer: Customer) => void; onDelete: (customer: Customer) => void; onImport: (rows: Customer[]) => void }) {
+export function CustomersView({ customers, query, onEdit, onDelete, onDeleteMany, onImport }: { customers: Customer[]; query: string; onEdit: (customer: Customer) => void; onDelete: (customer: Customer) => void; onDeleteMany: (ids: string[]) => void; onImport: (rows: Customer[]) => void }) {
   const toast = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -99,6 +99,8 @@ export function CustomersView({ customers, query, onEdit, onDelete, onImport }: 
       </div>
       <DataTable
         columns={["Name", "Phone", "Town", "Product Type", "Brand", "Model", "Balance", "Contact", "Actions"]}
+        rowIds={rows.map((item) => item.customerId)}
+        onDeleteSelected={onDeleteMany}
         rows={rows.map((item) => {
           const phone = item.mobile.replace(/\D/g, "");
           const waNumber = (item.whatsapp || item.mobile).replace(/\D/g, "");
