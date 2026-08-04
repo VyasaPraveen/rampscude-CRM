@@ -110,8 +110,10 @@ export interface Lead {
   phone: string;
   /** Nature of enquiry. */
   source: LeadSource;
-  /** Price quoted to the lead. */
+  /** Price quoted to the lead (GST-inclusive). */
   quotedPrice?: number;
+  /** Optional brochure link to share with this lead. */
+  brochureUrl?: string;
   /** Legacy free-text interest — no longer captured on the form. */
   interestedIn?: string;
   description: string;
@@ -140,11 +142,15 @@ export interface Quotation {
   customerLabel?: string;
   customerId: string;
   products: { productId: string; quantity: number; price: number; gstRate?: number }[];
+  /** Net (ex-GST) taxable value. Line prices are GST-inclusive. */
   subtotal: number;
   discount: number;
   gst: number;
+  /** Final payable (GST-inclusive) = subtotal + gst. */
   total: number;
   status: QuotationStatus;
+  /** Optional brochure link shared with this quotation (overrides the lead's). */
+  brochureUrl?: string;
   createdAt: string;
 }
 

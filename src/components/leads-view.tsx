@@ -1,10 +1,11 @@
 "use client";
 
-import { Pencil, Save, UserCheck, UserPlus } from "lucide-react";
+import { Link as LinkIcon, Pencil, Save, UserCheck, UserPlus } from "lucide-react";
 import { useState } from "react";
 import type { Brand, CustomerSourceType, Lead, LeadSource, LeadStatus, Product, ProductType, Quotation } from "@/types/crm";
 import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
+import { whatsappLink } from "@/lib/export";
 import { CUSTOMER_SOURCE_TYPES, ENQUIRY_NATURES, PRODUCT_TYPES, uniqueSorted } from "@/lib/options";
 import { currency, shortDate } from "@/utils/format";
 import { cn } from "@/lib/utils";
@@ -64,6 +65,19 @@ export function LeadsView({
     toast(`Lead removed: ${lead.name}`, "info");
   }
 
+  function shareBrochure(lead: Lead) {
+    if (!lead.brochureUrl) {
+      toast("Add a brochure link on this lead first.", "info");
+      return;
+    }
+    const phone = (lead.phone ?? "").replace(/\D/g, "");
+    if (!phone) {
+      toast("This lead has no phone number.", "info");
+      return;
+    }
+    window.open(whatsappLink(phone, `Product brochure: ${lead.brochureUrl}`), "_blank", "noopener");
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -107,6 +121,13 @@ export function LeadsView({
             >
               <UserCheck className="h-3.5 w-3.5" /> {item.convertedCustomerId ? "Converted" : "Convert"}
             </button>
+            <button
+              onClick={() => shareBrochure(item)}
+              title="Share the brochure link on WhatsApp"
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-slate-300"
+            >
+              <LinkIcon className="h-3.5 w-3.5" /> Brochure
+            </button>
             <DeleteButton resetKey={item.leadId} onDelete={() => remove(item)} />
           </div>
         ])}
@@ -130,6 +151,7 @@ type Draft = {
   sourceType: string;
   source: LeadSource;
   quotedPrice: string;
+  brochureUrl: string;
   description: string;
   status: LeadStatus;
 };
@@ -147,6 +169,7 @@ function toDraft(lead: Lead | null): Draft {
     sourceType: lead?.sourceType ?? "",
     source: lead?.source ?? "Product Enquiry",
     quotedPrice: typeof lead?.quotedPrice === "number" ? String(lead.quotedPrice) : "",
+    brochureUrl: lead?.brochureUrl ?? "",
     description: lead?.description ?? "",
     status: lead?.status ?? "New"
   };
@@ -195,6 +218,7 @@ function LeadModal({
       sourceType: (form.sourceType || undefined) as CustomerSourceType | undefined,
       source: form.source,
       quotedPrice: form.quotedPrice.trim() ? Math.max(0, Number(form.quotedPrice) || 0) : undefined,
+      brochureUrl: form.brochureUrl.trim() || undefined,
       interestedIn: initial?.interestedIn,
       description: form.description.trim(),
       status: form.status,
@@ -256,7 +280,8 @@ function LeadModal({
               ))}
             </select>
           </label>
-          <Field label="Quoted Price (₹)" value={form.quotedPrice} onChange={(v) => set("quotedPrice", v)} type="number" />
+          <Field label="Quoted Price (₹, incl. GST)" value={form.quotedPrice} onChange={(v) => set("quotedPrice", v)} type="number" />
+          <Field label="Brochure Link" value={form.brochureUrl} onChange={(v) => set("brochureUrl", v)} />
           <label className="text-sm font-semibold text-slate-700">
             Status
             <select value={form.status} onChange={(e) => set("status", e.target.value as LeadStatus)} className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2">

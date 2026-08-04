@@ -30,48 +30,81 @@ export interface QuotationLine {
   gstRate?: number;
 }
 
-export interface QuotationTotals {
-  subtotal: number;
-  effectiveDiscount: number;
-  gst: number;
-  total: number;
-  /** GST split by slab, so documents can show "GST 18%: x / GST 5%: y". */
-  byRate: { rate: number; taxable: number; tax: number }[];
+export interface RateBucket {
+  rate: number;
+  /** Net (ex-GST) taxable value in this slab. */
+  taxable: number;
+  /** GST embedded in this slab. */
+  tax: number;
+  /** Central GST — half of `tax` (intra-state supply). */
+  cgst: number;
+  /** State GST — the other half of `tax`. */
+  sgst: number;
 }
 
 /**
- * Totals for a set of quotation lines. The discount is spread across lines in
- * proportion to their value, then each line is taxed at its own slab.
+ * Totals for a set of quotation lines. Line prices are treated as GST-INCLUSIVE:
+ * the price the customer pays already contains the tax. Each line is back-calculated
+ * into its net (taxable) value and the embedded GST, which is split evenly into
+ * CGST + SGST for an intra-state supply. The discount is a rupee amount off the
+ * final (inclusive) price, spread across lines in proportion to their value.
  */
-export function computeTotals(lines: QuotationLine[], discount: number, rateOf: (line: QuotationLine) => number): QuotationTotals {
-  const subtotal = lines.reduce((sum, line) => sum + line.price * line.quantity, 0);
-  const effectiveDiscount = Math.min(Math.max(0, discount), subtotal); // never exceeds the subtotal
+export interface QuotationTotals {
+  /** Sum of GST-inclusive line totals, before discount. */
+  gross: number;
+  effectiveDiscount: number;
+  /** Net (ex-GST) taxable value after discount. */
+  taxable: number;
+  /** Total GST embedded in the inclusive price. */
+  gst: number;
+  /** Central GST — half of `gst`. */
+  cgst: number;
+  /** State GST — the other half of `gst`. */
+  sgst: number;
+  /** Final payable = taxable + gst = gross - discount. */
+  total: number;
+  /** GST split by slab, so documents can show each rate's net / CGST / SGST. */
+  byRate: RateBucket[];
+}
 
-  const buckets = new Map<number, { rate: number; taxable: number; tax: number }>();
+export function computeTotals(lines: QuotationLine[], discount: number, rateOf: (line: QuotationLine) => number): QuotationTotals {
+  const gross = lines.reduce((sum, line) => sum + line.price * line.quantity, 0);
+  const effectiveDiscount = Math.min(Math.max(0, discount), gross); // never exceeds the gross
+
+  // Group the discounted, GST-inclusive amounts by slab.
+  const buckets = new Map<number, { rate: number; inclusive: number }>();
   lines.forEach((line) => {
-    const lineTotal = line.price * line.quantity;
-    if (lineTotal <= 0) return;
-    const share = subtotal > 0 ? (lineTotal / subtotal) * effectiveDiscount : 0;
-    const taxable = lineTotal - share;
+    const lineGross = line.price * line.quantity;
+    if (lineGross <= 0) return;
+    const share = gross > 0 ? (lineGross / gross) * effectiveDiscount : 0;
+    const inclusive = lineGross - share;
     const rate = normaliseRate(rateOf(line)) ?? 0;
-    const bucket = buckets.get(rate) ?? { rate, taxable: 0, tax: 0 };
-    bucket.taxable += taxable;
+    const bucket = buckets.get(rate) ?? { rate, inclusive: 0 };
+    bucket.inclusive += inclusive;
     buckets.set(rate, bucket);
   });
 
+  let taxable = 0;
   let gst = 0;
   const byRate = [...buckets.values()]
-    .map((bucket) => {
-      const tax = Math.round((bucket.taxable * bucket.rate) / 100);
+    .map(({ rate, inclusive }) => {
+      // Back out the tax from the inclusive amount: net = incl / (1 + r/100).
+      const tax = Math.round(inclusive - inclusive / (1 + rate / 100));
+      const net = Math.round(inclusive) - tax; // keep net + tax === rounded inclusive
+      const cgst = Math.round(tax / 2);
+      const sgst = tax - cgst;
+      taxable += net;
       gst += tax;
-      return { ...bucket, taxable: Math.round(bucket.taxable), tax };
+      return { rate, taxable: net, tax, cgst, sgst };
     })
     .sort((a, b) => a.rate - b.rate);
 
-  return { subtotal, effectiveDiscount, gst, total: subtotal - effectiveDiscount + gst, byRate };
+  const cgst = Math.round(gst / 2);
+  const sgst = gst - cgst;
+  return { gross, effectiveDiscount, taxable, gst, cgst, sgst, total: taxable + gst, byRate };
 }
 
-/** Recompute a saved quotation's GST split from the rates stored on its lines. */
+/** Recompute a saved quotation's GST split from the (inclusive) prices on its lines. */
 export function totalsForQuotation(quotation: Quotation, settings: CompanySettings): QuotationTotals {
   return computeTotals(quotation.products, quotation.discount, (line) => normaliseRate(line.gstRate) ?? normaliseRate(settings.gstRate) ?? 0);
 }

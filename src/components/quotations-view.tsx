@@ -77,8 +77,10 @@ export function QuotationsView({
   }
 
   function handleBrochure(quotation: Quotation) {
-    if (!settings.brochureUrl) {
-      toast("Add a brochure link in Settings → Quotation Defaults.", "info");
+    // The quotation's own link wins; fall back to the originating lead's link.
+    const brochure = quotation.brochureUrl || leadOf(quotation.leadId)?.brochureUrl || "";
+    if (!brochure) {
+      toast("Add a brochure link on the quotation (or its lead) first.", "info");
       return;
     }
     const phone = phoneOf(quotation);
@@ -86,7 +88,7 @@ export function QuotationsView({
       toast("No phone number on the linked lead or customer.", "info");
       return;
     }
-    window.open(whatsappLink(phone, `${settings.name} — product brochure: ${settings.brochureUrl}`), "_blank", "noopener");
+    window.open(whatsappLink(phone, `${settings.name} — product brochure: ${brochure}`), "_blank", "noopener");
   }
 
   return (
@@ -95,7 +97,7 @@ export function QuotationsView({
         <button onClick={onNew} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white"><Plus className="h-4 w-4" /> New Quotation</button>
       </div>
       <DataTable
-        columns={["Quotation", "Reference", "Lead / Customer", "Subtotal", "GST", "Total", "Status", "Actions"]}
+        columns={["Quotation", "Reference", "Lead / Customer", "Net", "GST", "Total", "Status", "Actions"]}
         rows={rows.map((item) => [
           item.quotationNumber,
           item.reference || "—",

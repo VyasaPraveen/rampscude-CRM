@@ -443,7 +443,7 @@ export default function Page() {
     const price = product.price;
     const gstRate = rateForProduct(product, brandList, settings);
     const line = { productId: product.productId, quantity: 1, price, gstRate };
-    const { subtotal, gst, total } = computeTotals([line], 0, () => gstRate);
+    const { taxable, gst, total } = computeTotals([line], 0, () => gstRate);
     const quotation: Quotation = {
       quotationId: `QUO-${Date.now()}`,
       quotationNumber: `RC/QTN/2026/${String(nextNumber(quotationList.map((q) => q.quotationNumber))).padStart(3, "0")}`,
@@ -452,11 +452,12 @@ export default function Page() {
       customerLabel: lead.name,
       customerId: "",
       products: [line],
-      subtotal,
+      subtotal: taxable,
       discount: 0,
       gst,
       total,
       status: "Draft",
+      brochureUrl: lead.brochureUrl,
       createdAt: new Date().toISOString()
     };
     const next = [quotation, ...quotationList];

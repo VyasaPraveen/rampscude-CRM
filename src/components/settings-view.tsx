@@ -44,8 +44,8 @@ const SECTIONS: { title: string; fields: { key: TextKey; label: string; wide?: b
       { key: "warranty", label: "Product Warranty", wide: true },
       { key: "transport", label: "Transport Details", wide: true },
       { key: "deliveryTime", label: "Delivery Time", wide: true },
-      { key: "paymentTerms", label: "Payment Terms", wide: true },
-      { key: "brochureUrl", label: "Brochure Link (shared on leads & quotations)", wide: true }
+      { key: "paymentTerms", label: "Payment Terms", wide: true }
+      // Brochure link moved to the Lead and Quotation forms (set per enquiry).
     ]
   }
 ];

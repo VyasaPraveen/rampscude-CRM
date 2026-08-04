@@ -60,17 +60,21 @@ export function quotationMessage(
   const lines = quotation.products.map(
     (item) => `• ${productName(products, item.productId)} x${item.quantity} — ₹${inr(item.price * item.quantity)}`
   );
+  const split = totalsForQuotation(quotation, settings);
+  const brochure = quotation.brochureUrl || settings.brochureUrl;
   return [
     `*${settings.name}* — Quotation ${quotation.quotationNumber}`,
     recipient ? `To: ${recipient.name}` : "",
     "",
     ...lines,
     "",
-    `Subtotal: ₹${inr(quotation.subtotal)}`,
-    quotation.discount ? `Discount: -₹${inr(quotation.discount)}` : "",
-    `${gstLabel(totalsForQuotation(quotation, settings).byRate, settings.gstRate)}: ₹${inr(quotation.gst)}`,
-    `*Total: ₹${inr(quotation.total)}*`,
-    settings.brochureUrl ? `\nBrochure: ${settings.brochureUrl}` : "",
+    split.effectiveDiscount ? `Price (incl. GST): ₹${inr(split.gross)}` : "",
+    split.effectiveDiscount ? `Discount: -₹${inr(split.effectiveDiscount)}` : "",
+    `Net Amount: ₹${inr(split.taxable)}`,
+    `CGST: ₹${inr(split.cgst)}`,
+    `SGST: ₹${inr(split.sgst)}`,
+    `*Total (incl. GST): ₹${inr(split.total)}*`,
+    brochure ? `\nBrochure: ${brochure}` : "",
     "",
     `Thank you for your enquiry. — ${settings.name}`
   ]
@@ -238,13 +242,24 @@ export async function downloadQuotationPdf(
   ensureRoom(90);
   const labelX = pageWidth - marginX - 170;
   const valueX = pageWidth - marginX;
+  // Line prices are GST-inclusive, so the totals block breaks the tax back out:
+  // Net Amount + CGST + SGST reconciles to the inclusive Total.
   const split = totalsForQuotation(quotation, settings);
-  const totals: [string, string][] = [["Subtotal", rs(quotation.subtotal)]];
-  if (quotation.discount) totals.push(["Discount", `- ${rs(quotation.discount)}`]);
+  const totals: [string, string][] = [];
+  if (split.effectiveDiscount > 0) {
+    totals.push(["Price (incl. GST)", rs(split.gross)]);
+    totals.push(["Discount", `- ${rs(split.effectiveDiscount)}`]);
+  }
+  totals.push(["Net Amount", rs(split.taxable)]);
   if (split.byRate.length > 1) {
-    split.byRate.forEach((bucket) => totals.push([`GST @ ${bucket.rate}%`, rs(bucket.tax)]));
+    split.byRate.forEach((bucket) => {
+      totals.push([`CGST @ ${bucket.rate / 2}%`, rs(bucket.cgst)]);
+      totals.push([`SGST @ ${bucket.rate / 2}%`, rs(bucket.sgst)]);
+    });
   } else {
-    totals.push([gstLabel(split.byRate, settings.gstRate), rs(quotation.gst)]);
+    const rate = split.byRate[0]?.rate ?? settings.gstRate;
+    totals.push([`CGST @ ${rate / 2}%`, rs(split.cgst)]);
+    totals.push([`SGST @ ${rate / 2}%`, rs(split.sgst)]);
   }
 
   doc.setFont("helvetica", "normal");

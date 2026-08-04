@@ -6,7 +6,7 @@ import type { Brand, CompanySettings, Lead, Product, Quotation, QuotationStatus 
 import { productLabel } from "@/types/crm";
 import { currency } from "@/utils/format";
 import { Modal } from "@/components/ui";
-import { computeTotals, gstLabel, rateForProduct } from "@/lib/gst";
+import { computeTotals, rateForProduct } from "@/lib/gst";
 
 const STATUSES: QuotationStatus[] = ["Draft", "Sent", "Accepted", "Rejected"];
 
@@ -55,6 +55,7 @@ export function QuotationModal({
     "";
   const [leadId, setLeadId] = useState(initialLeadId);
   const [reference, setReference] = useState(quotation?.reference ?? "");
+  const [brochureUrl, setBrochureUrl] = useState(quotation?.brochureUrl ?? "");
   const [status, setStatus] = useState<QuotationStatus>(quotation?.status ?? "Draft");
   const [discount, setDiscount] = useState<number>(quotation?.discount ?? 0);
   const [items, setItems] = useState<LineItem[]>(
@@ -76,7 +77,7 @@ export function QuotationModal({
     .filter((rate) => typeof rate === "number" && rate >= 0)
     .sort((a, b) => a - b);
 
-  const { subtotal, gst, total, effectiveDiscount, byRate } = useMemo(
+  const { gross, taxable, gst, cgst, sgst, total, effectiveDiscount, byRate } = useMemo(
     () =>
       computeTotals(items, discount, (line) => {
         if (typeof line.gstRate === "number") return line.gstRate;
@@ -130,11 +131,12 @@ export function QuotationModal({
       // Once the lead has been converted, keep the customer linked too.
       customerId: lead.convertedCustomerId ?? "",
       products: items,
-      subtotal,
+      subtotal: taxable,
       discount: effectiveDiscount,
       gst,
       total,
       status,
+      brochureUrl: brochureUrl.trim() || undefined,
       createdAt: quotation?.createdAt ?? new Date().toISOString()
     });
   }
@@ -183,6 +185,15 @@ export function QuotationModal({
               className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2"
             />
           </label>
+          <label className="text-sm font-semibold text-slate-700 md:col-span-3">
+            Brochure Link
+            <input
+              value={brochureUrl}
+              onChange={(event) => setBrochureUrl(event.target.value)}
+              placeholder="https://… — shared on the PDF and the WhatsApp message"
+              className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2"
+            />
+          </label>
         </div>
 
         <div className="mt-6">
@@ -221,7 +232,7 @@ export function QuotationModal({
                   />
                 </label>
                 <label className="text-xs font-semibold text-slate-600">
-                  Unit price
+                  Unit price (incl. GST)
                   <input
                     type="number"
                     min={0}
@@ -268,13 +279,21 @@ export function QuotationModal({
             />
           </label>
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">
-            <Row label="Subtotal" value={currency(subtotal)} />
-            <Row label="Discount" value={`- ${currency(effectiveDiscount)}`} />
-            {byRate.length > 1
-              ? byRate.map((bucket) => <Row key={bucket.rate} label={`GST @ ${bucket.rate}%`} value={currency(bucket.tax)} />)
-              : <Row label={gstLabel(byRate, settings.gstRate)} value={currency(gst)} />}
+            <Row label="Price (incl. GST)" value={currency(gross)} />
+            {effectiveDiscount > 0 && <Row label="Discount" value={`- ${currency(effectiveDiscount)}`} />}
+            <Row label="Net Amount" value={currency(taxable)} />
+            {byRate.length > 1 ? (
+              byRate.map((bucket) => (
+                <Row key={bucket.rate} label={`CGST + SGST @ ${bucket.rate}%`} value={currency(bucket.tax)} />
+              ))
+            ) : (
+              <>
+                <Row label="CGST" value={currency(cgst)} />
+                <Row label="SGST" value={currency(sgst)} />
+              </>
+            )}
             <div className="mt-2 border-t border-slate-200 pt-2">
-              <Row label="Total" value={currency(total)} bold />
+              <Row label="Total (incl. GST)" value={currency(total)} bold />
             </div>
           </div>
         </div>
