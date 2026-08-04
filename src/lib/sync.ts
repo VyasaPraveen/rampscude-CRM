@@ -25,6 +25,16 @@ const API_TOKEN = process.env.NEXT_PUBLIC_SYNC_TOKEN || "";
 /** How often to poll the server for changes made on other devices. */
 const POLL_INTERVAL_MS = 8_000;
 
+/**
+ * How far to rewind the "changed since" marker on each poll. The server reports a
+ * single `now` timestamp, but a write can land between the moment the query runs
+ * and the moment `now` is read — advancing the marker past a change we never saw
+ * would drop it forever. Re-querying a small overlapping window each poll closes
+ * that race; re-emitting an already-seen module is harmless (it re-applies the
+ * same data). Also absorbs minor clock skew between the app server and clients.
+ */
+const POLL_OVERLAP_MS = 20_000;
+
 /** Guard against an accidentally huge module blowing up the request. */
 const MAX_DOC_BYTES = 4_000_000;
 
@@ -114,7 +124,9 @@ export function subscribeWorkspace(
     try {
       const data = await fetchWorkspace(initial ? 0 : lastNow);
       if (cancelled) return;
-      lastNow = data.now ?? lastNow;
+      // Rewind the marker slightly so the next poll re-checks an overlapping
+      // window and can never step over a write it hasn't observed yet.
+      lastNow = Math.max(0, (data.now ?? lastNow) - POLL_OVERLAP_MS);
 
       if (initial) {
         keys.forEach((key) => {

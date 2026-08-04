@@ -73,6 +73,7 @@ const CustomerModal = dynamic(() => import("@/components/customer-modal").then((
 import { STORAGE_KEYS, ensureDataVersion, loadState, saveState } from "@/lib/storage";
 import { upgradeStoredPasswords, verifyPassword } from "@/lib/password";
 import { onSyncStatus, persist, pushDoc, subscribeWorkspace, type SyncStatus } from "@/lib/sync";
+import { APP_VERSION } from "@/lib/version";
 
 type ModuleId =
   | "dashboard"
@@ -619,7 +620,7 @@ export default function Page() {
             </div>
             <div>
               <p className="text-sm font-semibold uppercase tracking-wide text-blue-200">RAMPS CUBE</p>
-              <h1 className="text-lg font-bold">CRM MVP</h1>
+              <h1 className="text-lg font-bold">CRM</h1>
             </div>
           </div>
           <button className="rounded-lg p-2 lg:hidden" onClick={() => setSidebarOpen(false)} aria-label="Close menu">
@@ -660,12 +661,14 @@ export default function Page() {
             </div>
           </div>
           <button
+            type="button"
             onClick={handleLogout}
             className="mt-1 flex w-full items-center gap-3 rounded-lg px-3 py-3 text-sm font-medium text-slate-300 transition hover:bg-white/10 hover:text-white"
           >
             <LogOut className="h-5 w-5" />
             Logout
           </button>
+          <p className="mt-2 px-3 text-[11px] text-slate-500">Version {APP_VERSION}</p>
         </div>
       </aside>
 
