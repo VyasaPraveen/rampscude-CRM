@@ -47,6 +47,7 @@ import {
 import type { AttendanceRecord, Brand, CompanySettings, Customer, Invoice, Lead, Order, Payment, Product, Quotation, ServiceRequest, User } from "@/types/crm";
 import { cn } from "@/lib/utils";
 import { computeTotals, rateForProduct } from "@/lib/gst";
+import { syncOrdersFromCustomer } from "@/lib/orders";
 import { Dashboard } from "@/components/dashboard-view";
 import { useToast } from "@/components/toast";
 
@@ -379,6 +380,13 @@ export default function Page() {
     const next = existed ? customerList.map((item) => (item.customerId === customer.customerId ? customer : item)) : [customer, ...customerList];
     setCustomerList(next);
     store(STORAGE_KEYS.customers, next);
+    // A customer's purchases/payment details are mirrored into Orders so they stay
+    // in sync whenever the customer is added or edited.
+    if ((customer.purchases?.length ?? 0) > 0) {
+      const nextOrders = syncOrdersFromCustomer(customer, orderList);
+      setOrderList(nextOrders);
+      store(STORAGE_KEYS.orders, nextOrders);
+    }
     setEditingCustomer(null);
     toast(existed ? `${customer.customerName} updated` : `${customer.customerName} added`);
   }
@@ -440,7 +448,9 @@ export default function Page() {
       inventory.find((p) => p.brand === lead.productBrand && p.model === lead.productModel) ??
       inventory.find((p) => p.brand === lead.productBrand && lead.productBrand);
     if (!product) return undefined; // no matching stock — nothing to quote yet
-    const price = product.price;
+    // Honour the price the user actually quoted on the lead (GST-inclusive); fall
+    // back to the stock sale price only when no quoted price was entered.
+    const price = typeof lead.quotedPrice === "number" && lead.quotedPrice > 0 ? lead.quotedPrice : product.price;
     const gstRate = rateForProduct(product, brandList, settings);
     const line = { productId: product.productId, quantity: 1, price, gstRate };
     const { taxable, gst, total } = computeTotals([line], 0, () => gstRate);

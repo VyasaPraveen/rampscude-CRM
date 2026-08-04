@@ -34,6 +34,24 @@ export type QuotationStatus = "Draft" | "Sent" | "Accepted" | "Rejected";
 export type OrderStatus = "Processing" | "Ready" | "Delivered" | "Cancelled";
 export type ServiceStatus = "Pending" | "In Progress" | "Completed";
 export type PaymentStatus = "Pending" | "Partial" | "Paid";
+export type PaymentMode = "Cash" | "UPI" | "Bank Transfer" | "Card" | "Cheque" | "Finance";
+
+/** A single product purchase by a customer, with its payment tracking. One purchase
+ *  maps to one Order, so a customer can buy repeatedly without duplicate records. */
+export interface Purchase {
+  purchaseId: string;
+  productBrand?: string;
+  productModel?: string;
+  productType?: ProductType;
+  /** Sale price (GST-inclusive). */
+  price: number;
+  /** Advance already received. Balance = price - advancePaid. */
+  advancePaid: number;
+  advanceDate?: string;
+  dueDate?: string;
+  paymentMode?: PaymentMode;
+  createdAt: string;
+}
 
 export interface Customer {
   customerId: string;
@@ -59,6 +77,8 @@ export interface Customer {
   /** Optional; WhatsApp share falls back to `mobile` when empty. */
   whatsapp?: string;
   remarks?: string;
+  /** Purchases with payment tracking — repeat buys live here, no duplicate customer. */
+  purchases?: Purchase[];
   createdAt: string;
 }
 
@@ -162,6 +182,13 @@ export interface Order {
   deliveryDate: string;
   paymentStatus: PaymentStatus;
   status: OrderStatus;
+  /** Set when this order was generated from a customer purchase (keeps them in sync). */
+  purchaseId?: string;
+  /** Purchase snapshot mirrored from the customer, so Orders shows the money detail. */
+  productLabel?: string;
+  amount?: number;
+  advancePaid?: number;
+  paymentMode?: PaymentMode;
   createdAt: string;
 }
 

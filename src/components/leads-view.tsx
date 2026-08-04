@@ -45,7 +45,10 @@ export function LeadsView({
   const [editing, setEditing] = useState<Lead | null | "new">(null);
   const [source, setSource] = useState<LeadSource | "All">("All");
 
+  // Converted leads move into Customers — keep them out of the active Leads list
+  // (they're still retained in data so their quotations stay linked).
   const rows = leads.filter((item) => {
+    if (item.convertedCustomerId) return false;
     const haystack = `${item.name} ${item.town} ${item.phone} ${item.productBrand ?? ""} ${item.productModel ?? ""}`.toLowerCase();
     return haystack.includes(query.toLowerCase()) && (source === "All" || item.source === source);
   });

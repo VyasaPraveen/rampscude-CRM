@@ -5,7 +5,9 @@ import { useState } from "react";
 import type { Customer, Order, OrderStatus, PaymentStatus } from "@/types/crm";
 import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
-import { shortDate } from "@/utils/format";
+import { currency, shortDate } from "@/utils/format";
+
+const orderBalance = (order: Order) => Math.max(0, (order.amount ?? 0) - (order.advancePaid ?? 0));
 
 const ORDER_STATUSES: OrderStatus[] = ["Processing", "Ready", "Delivered", "Cancelled"];
 const PAYMENT_STATUSES: PaymentStatus[] = ["Pending", "Partial", "Paid"];
@@ -40,11 +42,14 @@ export function OrdersView({ orders, customers, query, onChange }: { readonly or
         </button>
       </div>
       <DataTable
-        columns={["Order", "Customer", "Quotation", "Delivery", "Payment", "Status", "Action"]}
+        columns={["Order", "Customer", "Product", "Amount", "Advance", "Balance", "Delivery", "Payment", "Status", "Action"]}
         rows={rows.map((item) => [
           <span key="o" className="font-semibold text-slate-900">{item.orderNumber}</span>,
           nameOf(item.customerId),
-          item.quotationId,
+          item.productLabel || item.quotationId || "—",
+          typeof item.amount === "number" ? currency(item.amount) : "—",
+          typeof item.advancePaid === "number" ? currency(item.advancePaid) : "—",
+          typeof item.amount === "number" ? currency(orderBalance(item)) : "—",
           item.deliveryDate ? shortDate(item.deliveryDate) : "—",
           <Badge key="p" label={item.paymentStatus} />,
           <Badge key="s" label={item.status} />,
