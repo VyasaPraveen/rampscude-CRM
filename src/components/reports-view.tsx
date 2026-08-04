@@ -1,20 +1,69 @@
 "use client";
 
 import { Download, FileBarChart } from "lucide-react";
+import { useState } from "react";
 import type { Brand, CompanySettings, Customer, Invoice, Lead, Order, Payment, Product, Quotation, ServiceRequest } from "@/types/crm";
 import { useToast } from "@/components/toast";
 import { uniqueSorted } from "@/lib/options";
 import { downloadCSV } from "@/lib/export";
+import { cn } from "@/lib/utils";
 
-export function ReportsView({ customers, products, brands, settings, quotations, leads, invoices, orders, payments, services }: { customers: Customer[]; products: Product[]; brands: Brand[]; settings: CompanySettings; quotations: Quotation[]; leads: Lead[]; invoices: Invoice[]; orders: Order[]; payments: Payment[]; services: ServiceRequest[] }) {
+type RangeKey = "all" | "today" | "week" | "month" | "custom";
+const RANGE_LABELS: Record<RangeKey, string> = { all: "All", today: "Today", week: "This Week", month: "This Month", custom: "Custom" };
+
+/** Resolve a range preset into [startMs, endMsExclusive], or null for "all". */
+function rangeBounds(key: RangeKey, from: string, to: string): [number, number] | null {
+  const now = new Date();
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  if (key === "all") return null;
+  if (key === "today") return [startOfDay(now), startOfDay(now) + 86_400_000];
+  if (key === "week") return [startOfDay(now) - 6 * 86_400_000, startOfDay(now) + 86_400_000];
+  if (key === "month") return [new Date(now.getFullYear(), now.getMonth(), 1).getTime(), new Date(now.getFullYear(), now.getMonth() + 1, 1).getTime()];
+  const start = from ? new Date(from).getTime() : Number.NEGATIVE_INFINITY;
+  const end = to ? new Date(to).getTime() + 86_400_000 : Number.POSITIVE_INFINITY;
+  return [start, end];
+}
+
+function inRange(dateStr: string, bounds: [number, number] | null): boolean {
+  if (!bounds) return true;
+  const t = new Date(dateStr).getTime();
+  if (Number.isNaN(t)) return false;
+  return t >= bounds[0] && t < bounds[1];
+}
+
+export function ReportsView(props: { customers: Customer[]; products: Product[]; brands: Brand[]; settings: CompanySettings; quotations: Quotation[]; leads: Lead[]; invoices: Invoice[]; orders: Order[]; payments: Payment[]; services: ServiceRequest[] }) {
   const toast = useToast();
+  const { settings, brands } = props;
+  const allCustomers = props.customers;
+
+  const [rangeKey, setRangeKey] = useState<RangeKey>("all");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [brandFilter, setBrandFilter] = useState("all");
+
+  const bounds = rangeBounds(rangeKey, from, to);
+  const inR = (d: string) => inRange(d, bounds);
+  const brandMatch = (b?: string) => brandFilter === "all" || b === brandFilter;
+  const brandChoices = uniqueSorted([...props.brands.map((b) => b.name), ...props.products.map((p) => p.brand)]);
+
+  // Date range narrows the transactional reports; the brand filter narrows the
+  // stock / sales reports. Builders below read these filtered datasets.
+  const customers = props.customers.filter((c) => inR(c.createdAt));
+  const leads = props.leads.filter((l) => inR(l.createdAt));
+  const quotations = props.quotations.filter((q) => inR(q.createdAt));
+  const orders = props.orders.filter((o) => inR(o.createdAt));
+  const invoices = props.invoices.filter((i) => inR(i.date));
+  const payments = props.payments.filter((p) => inR(p.createdAt));
+  const services = props.services.filter((s) => inR(s.createdAt));
+  const products = props.products.filter((p) => brandMatch(p.brand));
+
   const nameOf = (customerId: string) => {
-    const c = customers.find((item) => item.customerId === customerId);
+    const c = allCustomers.find((item) => item.customerId === customerId);
     return c ? c.companyName || c.customerName : customerId;
   };
   const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const quotationLabel = (q: Quotation) =>
-    customers.some((c) => c.customerId === q.customerId) ? nameOf(q.customerId) : q.customerLabel ?? nameOf(q.customerId);
+    allCustomers.some((c) => c.customerId === q.customerId) ? nameOf(q.customerId) : q.customerLabel ?? nameOf(q.customerId);
 
   // Stock helpers: quantity defaults to 1, cost falls back purchasePrice → NLC → 0.
   const qtyOf = (p: Product) => p.quantity ?? 1;
@@ -258,7 +307,42 @@ export function ReportsView({ customers, products, brands, settings, quotations,
   }
 
   return (
-    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          {(Object.keys(RANGE_LABELS) as RangeKey[]).map((key) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setRangeKey(key)}
+              className={cn("rounded-lg border px-3 py-1.5 text-sm font-semibold", rangeKey === key ? "border-blue-600 bg-blue-600 text-white" : "border-slate-200 bg-white text-slate-700")}
+            >
+              {RANGE_LABELS[key]}
+            </button>
+          ))}
+          {rangeKey === "custom" && (
+            <div className="flex items-center gap-2">
+              <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-9 rounded-lg border border-slate-200 px-2 text-sm outline-none ring-blue-500 focus:ring-2" />
+              <span className="text-sm text-slate-400">to</span>
+              <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="h-9 rounded-lg border border-slate-200 px-2 text-sm outline-none ring-blue-500 focus:ring-2" />
+            </div>
+          )}
+          <label className="ml-auto flex items-center gap-2 text-sm font-medium text-slate-600">
+            Brand
+            <select value={brandFilter} onChange={(e) => setBrandFilter(e.target.value)} className="h-9 rounded-lg border border-slate-200 px-2 text-sm outline-none ring-blue-500 focus:ring-2">
+              <option value="all">All brands</option>
+              {brandChoices.map((b) => (
+                <option key={b} value={b}>{b}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <p className="text-xs text-slate-500">
+          Date range applies to Customers, Leads, Quotations, Orders, Invoices, Payments &amp; Services. Brand applies to the Stock &amp; Sales reports.
+        </p>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
       {reports.map((report) => (
         <div key={report.title} className="flex flex-col rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
           <FileBarChart className="mb-4 h-8 w-8 text-blue-600" />
@@ -272,6 +356,7 @@ export function ReportsView({ customers, products, brands, settings, quotations,
           </button>
         </div>
       ))}
+      </div>
     </div>
   );
 }

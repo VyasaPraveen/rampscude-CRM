@@ -760,7 +760,7 @@ export default function Page() {
             />
           )}
           {activeModule === "orders" && <OrdersView orders={orderList} customers={customerList} query={globalSearch} onChange={updateOrders} />}
-          {activeModule === "invoices" && <InvoicesView invoices={invoiceList} query={globalSearch} onChange={updateInvoices} />}
+          {activeModule === "invoices" && <InvoicesView invoices={invoiceList} customers={customerList} brands={brandList} settings={settings} query={globalSearch} onChange={updateInvoices} />}
           {activeModule === "services" && <ServicesView services={serviceList} customers={customerList} query={globalSearch} onChange={updateServices} />}
           {activeModule === "attendance" && <AttendanceView users={userList} records={attendance} onChange={updateAttendance} />}
           {activeModule === "payments" && <PaymentsView payments={paymentList} customers={customerList} query={globalSearch} onChange={updatePayments} />}

@@ -1,6 +1,6 @@
-import type { CompanySettings, Customer, Lead, Product, Quotation } from "@/types/crm";
+import type { CompanySettings, Customer, Invoice, Lead, Product, Quotation } from "@/types/crm";
 import { productLabel } from "@/types/crm";
-import { gstLabel, totalsForQuotation } from "@/lib/gst";
+import { gstLabel, inclusiveBreakdown, totalsForQuotation } from "@/lib/gst";
 
 /** Rupee formatting for PDF output — jsPDF's core fonts lack the ₹ glyph, so use plain digits. */
 function inr(value: number): string {
@@ -349,6 +349,129 @@ export async function downloadQuotationPdf(
   });
 
   doc.save(`${quotation.quotationNumber.replace(/[^\w-]+/g, "-")}.pdf`);
+}
+
+/**
+ * Generate and download a GST tax-invoice PDF from a saved invoice. The amount is
+ * GST-inclusive, so the body shows Net + CGST + SGST reconciling to the total.
+ */
+export async function downloadInvoicePdf(invoice: Invoice, settings: CompanySettings): Promise<void> {
+  const { jsPDF } = await import("jspdf");
+  const autoTable = (await import("jspdf-autotable")).default;
+
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const marginX = 40;
+  let y = 44;
+
+  // Letterhead
+  const logo = await loadImage(settings.logo ?? "");
+  let drewLogo = false;
+  if (logo) {
+    try {
+      const props = doc.getImageProperties(logo);
+      const width = 190;
+      const height = (props.height / props.width) * width;
+      doc.addImage(logo, "PNG", marginX, y - 12, width, height);
+      y += height - 4;
+      drewLogo = true;
+    } catch {
+      // fall back to text
+    }
+  }
+  if (!drewLogo) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(17);
+    doc.setTextColor(17, 24, 39);
+    doc.text(settings.name, marginX, y);
+    y += 16;
+  }
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(100, 116, 139);
+  [
+    [settings.addressLine1, settings.addressLine2].filter(Boolean).join(", "),
+    [settings.city, settings.pincode].filter(Boolean).join(" - "),
+    [settings.phone, settings.altPhone].filter(Boolean).join(" / "),
+    settings.gstin ? `GSTIN: ${settings.gstin}` : ""
+  ]
+    .filter(Boolean)
+    .forEach((line) => doc.text(line, marginX, (y += 11)));
+
+  doc.setTextColor(17, 24, 39);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.text("TAX INVOICE", pageWidth - marginX, 50, { align: "right" });
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.text(invoice.invoiceNumber, pageWidth - marginX, 68, { align: "right" });
+  doc.text(formatDate(invoice.date), pageWidth - marginX, 82, { align: "right" });
+
+  doc.setDrawColor(203, 213, 225);
+  doc.line(marginX, (y += 12), pageWidth - marginX, y);
+
+  // Bill to
+  y += 20;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10.5);
+  doc.text("Bill To,", marginX, y);
+  doc.setFont("helvetica", "bold");
+  doc.text(invoice.customerName || "—", marginX, (y += 14));
+  doc.setFont("helvetica", "normal");
+  if (invoice.town) doc.text(invoice.town, marginX, (y += 13));
+
+  const { net, cgst, sgst } = inclusiveBreakdown(invoice.amount, invoice.gstRate ?? settings.gstRate);
+  const rate = invoice.gstRate ?? settings.gstRate;
+
+  autoTable(doc, {
+    startY: y + 18,
+    head: [["Description", "Taxable Value", `CGST @ ${rate / 2}%`, `SGST @ ${rate / 2}%`, "Total"]],
+    body: [[invoice.productLabel || "Goods / Services", rs(net), rs(cgst), rs(sgst), rs(invoice.amount)]],
+    styles: { fontSize: 9.5, cellPadding: 6, lineColor: [148, 163, 184], lineWidth: 0.5, textColor: [17, 24, 39] },
+    headStyles: { fillColor: [241, 245, 249], textColor: [17, 24, 39], fontStyle: "bold", halign: "center" },
+    columnStyles: { 1: { halign: "right" }, 2: { halign: "right" }, 3: { halign: "right" }, 4: { halign: "right" } },
+    margin: { left: marginX, right: marginX }
+  });
+
+  let cursor = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 16;
+  const labelX = pageWidth - marginX - 170;
+  const valueX = pageWidth - marginX;
+  ([
+    ["Net Amount", rs(net)],
+    [`CGST @ ${rate / 2}%`, rs(cgst)],
+    [`SGST @ ${rate / 2}%`, rs(sgst)]
+  ] as [string, string][]).forEach(([label, value]) => {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    doc.text(label, labelX, cursor);
+    doc.text(value, valueX, cursor, { align: "right" });
+    cursor += 15;
+  });
+  doc.setDrawColor(148, 163, 184);
+  doc.line(labelX, cursor - 9, valueX, cursor - 9);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11.5);
+  doc.text("Total (incl. GST)", labelX, cursor + 4);
+  doc.text(rs(invoice.amount), valueX, cursor + 4, { align: "right" });
+
+  // Bank + signatory
+  cursor += 44;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9.5);
+  [
+    settings.bankName ? `Our Bank : ${settings.bankName}` : "",
+    settings.accountNo ? `A/C No. ${settings.accountNo}` : "",
+    settings.ifsc ? `IFSC Code ${settings.ifsc}` : "",
+    settings.branch ? `Branch: ${settings.branch}` : ""
+  ]
+    .filter(Boolean)
+    .forEach((line) => doc.text(line, marginX, (cursor += 13)));
+  doc.setFont("helvetica", "bold");
+  doc.text(`For ${settings.name}`, valueX, cursor - 26, { align: "right" });
+  doc.setFont("helvetica", "normal");
+  doc.text(`( ${settings.proprietor} )`, valueX, cursor, { align: "right" });
+
+  doc.save(`${invoice.invoiceNumber.replace(/[^\w-]+/g, "-")}.pdf`);
 }
 
 /** Trigger a client-side CSV download. First row is treated as the header. */

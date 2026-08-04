@@ -192,20 +192,29 @@ export interface Order {
   createdAt: string;
 }
 
-/** Invoice — created in Tally, synced into the CRM and marked Created / Shared. */
+/** Invoice — created from a customer's saved details, imported from Tally, or added
+ *  manually; marked Created / Shared. `amount` is GST-inclusive. */
 export interface Invoice {
   invoiceId: string;
   invoiceNumber: string;
   customerName: string;
   town: string;
   date: string;
+  /** GST-inclusive total. */
   amount: number;
   /** Where the record originated. */
-  source: "Tally" | "Manual";
+  source: "Tally" | "Manual" | "CRM";
   /** Marked once the invoice has been raised. */
   created: boolean;
   /** Marked once the invoice has been shared with the customer. */
   shared: boolean;
+  /** Set when created from a saved customer. */
+  customerId?: string;
+  /** GST slab (%) applied — drives the Net / CGST / SGST split on the PDF. */
+  gstRate?: number;
+  /** Products billed (for the PDF / description). */
+  productLabel?: string;
+  paymentMode?: PaymentMode;
   createdAt: string;
 }
 

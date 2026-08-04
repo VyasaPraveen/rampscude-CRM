@@ -109,6 +109,16 @@ export function totalsForQuotation(quotation: Quotation, settings: CompanySettin
   return computeTotals(quotation.products, quotation.discount, (line) => normaliseRate(line.gstRate) ?? normaliseRate(settings.gstRate) ?? 0);
 }
 
+/** Split a single GST-inclusive amount into net + CGST + SGST at one rate. */
+export function inclusiveBreakdown(amount: number, rate: number): { net: number; gst: number; cgst: number; sgst: number } {
+  const r = normaliseRate(rate) ?? 0;
+  const net = Math.round(amount / (1 + r / 100));
+  const gst = Math.round(amount) - net;
+  const cgst = Math.round(gst / 2);
+  const sgst = gst - cgst;
+  return { net, gst, cgst, sgst };
+}
+
 /** Label for a GST split, e.g. "GST (18%)" or "GST (5% + 18%)" for a mixed quotation. */
 export function gstLabel(byRate: { rate: number }[], fallback: number): string {
   const rates = byRate.filter((bucket) => bucket.rate > 0).map((bucket) => bucket.rate);
