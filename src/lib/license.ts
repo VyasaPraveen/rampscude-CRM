@@ -16,10 +16,6 @@ export type LicenseStatus = "checking" | "active" | "renew-soon" | "expired" | "
 /** Days before the term end that the renewal notice begins. */
 export const RENEWAL_WINDOW_DAYS = 30;
 
-function pad(value: number): string {
-  return String(value).padStart(2, "0");
-}
-
 /** Parse YYYYMMDD → local-midnight Date, or null. */
 export function parseYmd(value: string): Date | null {
   const match = /^(\d{4})(\d{2})(\d{2})$/.exec(value);

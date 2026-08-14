@@ -50,6 +50,7 @@ import { computeTotals, rateForProduct } from "@/lib/gst";
 import { syncOrdersFromCustomer, syncPaymentsFromCustomer } from "@/lib/orders";
 import { evaluateLicense, licenseRecordFromKey, verifyLicenseKey, type LicenseStatus } from "@/lib/license";
 import { LicenseScreen } from "@/components/license-screen";
+import { downloadBackup, ensureDailyLocalBackup, lastManualBackupDay, markManualBackupToday, parseBackup } from "@/lib/backup";
 import { Dashboard } from "@/components/dashboard-view";
 import { useToast } from "@/components/toast";
 
@@ -192,6 +193,9 @@ export default function Page() {
   const [license, setLicense] = useState<LicenseRecord | null>(null);
   const [licenseStatus, setLicenseStatus] = useState<LicenseStatus>("checking");
   const licenseResolvedRef = useRef(false);
+  // Daily-backup nudge: "failed" = today's local snapshot could not be written;
+  // "reminder" = no off-device copy downloaded today; null = nothing to show.
+  const [backupNotice, setBackupNotice] = useState<"failed" | "reminder" | null>(null);
   // Tracks leads currently being converted, to make convert idempotent against double-clicks.
   const convertingRef = useRef<Set<string>>(new Set());
   const [editingCustomer, setEditingCustomer] = useState<Customer | null | "new">(null);
@@ -291,6 +295,12 @@ export default function Page() {
     // lock screen.
     const cachedLicense = cached[STORAGE_KEYS.license] as LicenseRecord | null;
     if (cachedLicense) resolveLicense(cachedLicense);
+
+    // Automatic daily local backup + reminder. A snapshot is written once a day; if
+    // that fails (storage blocked) we warn, otherwise we nudge for an off-device copy.
+    const backupResult = ensureDailyLocalBackup(cached);
+    if (backupResult === "failed") setBackupNotice("failed");
+    else if (lastManualBackupDay() !== new Date().toISOString().slice(0, 10)) setBackupNotice("reminder");
 
     // Restore the session from the LIVE user record (not the stored snapshot) so a
     // removed, deactivated, or role-changed account cannot linger via localStorage.
@@ -448,6 +458,63 @@ export default function Page() {
     store(STORAGE_KEYS.license, record);
     toast("Licence activated.");
     return null;
+  }
+
+  /** Current per-module data, for a backup file. */
+  function snapshotData(): Record<string, unknown> {
+    return {
+      [STORAGE_KEYS.customers]: customerList,
+      [STORAGE_KEYS.quotations]: quotationList,
+      [STORAGE_KEYS.inventory]: inventory,
+      [STORAGE_KEYS.leads]: leadList,
+      [STORAGE_KEYS.invoices]: invoiceList,
+      [STORAGE_KEYS.orders]: orderList,
+      [STORAGE_KEYS.services]: serviceList,
+      [STORAGE_KEYS.payments]: paymentList,
+      [STORAGE_KEYS.brands]: brandList,
+      [STORAGE_KEYS.users]: userList,
+      [STORAGE_KEYS.attendance]: attendance,
+      [STORAGE_KEYS.settings]: settings,
+      [STORAGE_KEYS.license]: license
+    };
+  }
+
+  /** Download an off-device backup file and clear the daily reminder. */
+  function downloadBackupNow() {
+    const name = downloadBackup(snapshotData());
+    markManualBackupToday();
+    setBackupNotice(null);
+    toast(`Backup downloaded: ${name}`);
+  }
+
+  /** Restore every module from an uploaded backup file (overwrites current data). */
+  function restoreBackup(text: string): boolean {
+    const modules = parseBackup(text);
+    if (!modules) {
+      toast("That file is not a valid Ramps Cube backup.", "info");
+      return false;
+    }
+    const apply = <T,>(key: string, setter: (value: T) => void) => {
+      if (key in modules) {
+        const value = modules[key] as T;
+        setter(value);
+        store(key, value);
+      }
+    };
+    apply<Customer[]>(STORAGE_KEYS.customers, setCustomerList);
+    apply<Quotation[]>(STORAGE_KEYS.quotations, setQuotationList);
+    apply<Product[]>(STORAGE_KEYS.inventory, setInventory);
+    apply<Lead[]>(STORAGE_KEYS.leads, setLeadList);
+    apply<Invoice[]>(STORAGE_KEYS.invoices, setInvoiceList);
+    apply<Order[]>(STORAGE_KEYS.orders, setOrderList);
+    apply<ServiceRequest[]>(STORAGE_KEYS.services, setServiceList);
+    apply<Payment[]>(STORAGE_KEYS.payments, setPaymentList);
+    apply<Brand[]>(STORAGE_KEYS.brands, setBrandList);
+    apply<User[]>(STORAGE_KEYS.users, setUserList);
+    apply<AttendanceRecord[]>(STORAGE_KEYS.attendance, setAttendance);
+    apply<CompanySettings>(STORAGE_KEYS.settings, (value) => setSettings({ ...settingsSeed, ...value }));
+    toast("Backup restored to this workspace.");
+    return true;
   }
 
   function saveCustomer(customer: Customer) {
@@ -965,6 +1032,19 @@ export default function Page() {
               Your CRM licence expires on <span className="font-bold">{new Date(license.validUntil).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</span>. Please renew before then to avoid interruption — the CRM locks after this date.
             </p>
           )}
+          {backupNotice && (
+            <div className={cn("mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3 text-sm", backupNotice === "failed" ? "border-red-300 bg-red-50 text-red-800" : "border-amber-300 bg-amber-50 text-amber-900")}>
+              <span className="font-medium">
+                {backupNotice === "failed"
+                  ? "Daily backup not done — this device could not save a local backup. Please download a backup now."
+                  : "Daily backup reminder — download today's off-device backup to keep your data safe."}
+              </span>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={downloadBackupNow} className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white">Backup now</button>
+                <button type="button" onClick={() => setBackupNotice(null)} className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600">Dismiss</button>
+              </div>
+            </div>
+          )}
           {syncStatus === "connecting" && (
             <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800" role="status">
               Loading your workspace… showing this device&apos;s saved data until the cloud responds.
@@ -999,7 +1079,7 @@ export default function Page() {
           {activeModule === "payments" && <PaymentsView payments={paymentList} customers={customerList} query={globalSearch} onChange={updatePayments} />}
           {activeModule === "users" && isAdmin && <UsersView users={userList} currentUserId={currentUser.id} onChange={updateUsers} />}
           {activeModule === "reports" && <ReportsView customers={customerList} products={inventory} brands={brandList} settings={settings} quotations={quotationList} leads={leadList} invoices={invoiceList} orders={orderList} payments={paymentList} services={serviceList} />}
-          {activeModule === "settings" && <SettingsView settings={settings} users={userList} onChange={updateSettings} />}
+          {activeModule === "settings" && <SettingsView settings={settings} users={userList} onChange={updateSettings} onBackup={downloadBackupNow} onRestore={restoreBackup} lastManualBackup={lastManualBackupDay() || undefined} licenseUntil={license?.validUntil} />}
         </section>
       </div>
 

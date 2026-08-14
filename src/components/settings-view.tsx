@@ -1,7 +1,7 @@
 "use client";
 
-import { Building2, ImageUp, Plus, Save, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { Building2, Database, DownloadCloud, ImageUp, Plus, Save, ShieldCheck, Trash2, UploadCloud } from "lucide-react";
+import { useRef, useState } from "react";
 import type { CompanySettings, User } from "@/types/crm";
 import { Panel, SimpleRows } from "@/components/ui";
 import { useToast } from "@/components/toast";
@@ -55,15 +55,25 @@ const SECTIONS: { title: string; fields: { key: TextKey; label: string; wide?: b
 export function SettingsView({
   settings,
   users,
-  onChange
+  onChange,
+  onBackup,
+  onRestore,
+  lastManualBackup,
+  licenseUntil
 }: {
   readonly settings: CompanySettings;
   readonly users: User[];
   readonly onChange: (settings: CompanySettings) => boolean;
+  readonly onBackup: () => void;
+  readonly onRestore: (text: string) => boolean;
+  readonly lastManualBackup?: string;
+  readonly licenseUntil?: string;
 }) {
   const toast = useToast();
   const [form, setForm] = useState<CompanySettings>(settings);
   const [newSlab, setNewSlab] = useState("");
+  const restoreRef = useRef<HTMLInputElement>(null);
+  const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
 
   function set<K extends keyof CompanySettings>(key: K, value: CompanySettings[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -236,6 +246,63 @@ export function SettingsView({
           <CustomFieldManager title="Lead fields" defs={form.leadFields} onChange={(defs) => set("leadFields", defs)} />
           <CustomFieldManager title="Customer fields" defs={form.customerFields} onChange={(defs) => set("customerFields", defs)} />
         </div>
+      </Panel>
+
+      <Panel title="Backup & Restore">
+        <p className="mb-3 inline-flex items-center gap-2 text-sm text-slate-500">
+          <Database className="h-4 w-4 text-blue-600" /> A local backup is saved automatically each day. Download an off-device copy regularly, and restore from a file if needed.
+        </p>
+        <p className="mb-4 text-xs text-slate-500">
+          {lastManualBackup ? `Last downloaded backup: ${lastManualBackup}` : "No off-device backup downloaded yet."}
+        </p>
+        <input
+          ref={restoreRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={async (event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) setConfirmRestore(await file.text());
+          }}
+        />
+        <div className="flex flex-wrap gap-3">
+          <button type="button" onClick={onBackup} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-soft">
+            <DownloadCloud className="h-4 w-4" /> Download Backup
+          </button>
+          <button type="button" onClick={() => restoreRef.current?.click()} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:border-blue-300">
+            <UploadCloud className="h-4 w-4" /> Restore from File
+          </button>
+        </div>
+        {confirmRestore !== null && (
+          <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4">
+            <p className="text-sm font-medium text-amber-900">Restoring will overwrite all current data on this workspace with the backup file. Continue?</p>
+            <div className="mt-3 flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  onRestore(confirmRestore);
+                  setConfirmRestore(null);
+                }}
+                className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white"
+              >
+                Yes, restore &amp; overwrite
+              </button>
+              <button type="button" onClick={() => setConfirmRestore(null)} className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600">
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </Panel>
+
+      <Panel title="Licence">
+        <p className="inline-flex items-center gap-2 text-sm text-slate-600">
+          <ShieldCheck className="h-4 w-4 text-green-600" />
+          {licenseUntil
+            ? `This CRM is licensed and active until ${new Date(licenseUntil).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}. Renewal is yearly — contact your vendor for a renewal key.`
+            : "Licence status unavailable."}
+        </p>
       </Panel>
 
       <Panel title="User Management">
