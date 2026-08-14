@@ -2,16 +2,15 @@
 
 import { Link as LinkIcon, Pencil, Save, UserCheck, UserPlus } from "lucide-react";
 import { useState } from "react";
-import type { Brand, CustomFieldDef, CustomerSourceType, Lead, LeadSource, LeadStatus, Product, ProductType, Quotation } from "@/types/crm";
+import type { Brand, CompanySettings, CustomFieldDef, CustomerSourceType, Lead, LeadSource, LeadStatus, Product, ProductType, Quotation } from "@/types/crm";
 import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { CustomFieldInputs } from "@/components/custom-fields";
 import { whatsappLink } from "@/lib/export";
-import { CUSTOMER_SOURCE_TYPES, ENQUIRY_NATURES, PRODUCT_TYPES, uniqueSorted } from "@/lib/options";
+import { optionList, uniqueSorted } from "@/lib/options";
 import { currency, shortDate } from "@/utils/format";
 import { cn } from "@/lib/utils";
 
-const SOURCES: LeadSource[] = ENQUIRY_NATURES;
 const STATUSES: LeadStatus[] = ["New", "Follow-up", "Quotation Sent", "Order Confirmed", "Closed"];
 
 /** Next lead sequence from the max existing number, so deletions never reuse one. */
@@ -29,6 +28,7 @@ export function LeadsView({
   leads,
   products,
   brands,
+  settings,
   customFields,
   query,
   onChange,
@@ -38,6 +38,7 @@ export function LeadsView({
   readonly leads: Lead[];
   readonly products: Product[];
   readonly brands: Brand[];
+  readonly settings: CompanySettings;
   readonly customFields?: CustomFieldDef[];
   readonly query: string;
   readonly onChange: (leads: Lead[]) => void;
@@ -47,6 +48,7 @@ export function LeadsView({
   const toast = useToast();
   const [editing, setEditing] = useState<Lead | null | "new">(null);
   const [source, setSource] = useState<LeadSource | "All">("All");
+  const SOURCES = optionList(settings, "enquiryNatures");
 
   // Converted leads move into Customers — keep them out of the active Leads list
   // (they're still retained in data so their quotations stay linked).
@@ -94,10 +96,10 @@ export function LeadsView({
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-2">
-          {(["All", ...SOURCES] as const).map((item) => (
+          {["All", ...SOURCES].map((item) => (
             <button
               key={item}
-              onClick={() => setSource(item)}
+              onClick={() => setSource(item as LeadSource | "All")}
               className={cn("rounded-lg border px-3 py-1.5 text-sm font-semibold", source === item ? "border-blue-600 bg-blue-600 text-white" : "border-slate-200 bg-white text-slate-700")}
             >
               {item}
@@ -147,7 +149,7 @@ export function LeadsView({
         ])}
       />
       {editing !== null && (
-        <LeadModal initial={editing === "new" ? null : editing} products={products} brands={brands} customFields={customFields} onClose={() => setEditing(null)} onSave={save} existingNumbers={leads.map((l) => l.leadNumber)} />
+        <LeadModal initial={editing === "new" ? null : editing} products={products} brands={brands} settings={settings} customFields={customFields} onClose={() => setEditing(null)} onSave={save} existingNumbers={leads.map((l) => l.leadNumber)} />
       )}
     </div>
   );
@@ -195,6 +197,7 @@ function LeadModal({
   initial,
   products,
   brands,
+  settings,
   customFields,
   onClose,
   onSave,
@@ -203,6 +206,7 @@ function LeadModal({
   readonly initial: Lead | null;
   readonly products: Product[];
   readonly brands: Brand[];
+  readonly settings: CompanySettings;
   readonly customFields?: CustomFieldDef[];
   readonly onClose: () => void;
   readonly onSave: (lead: Lead) => void;
@@ -211,6 +215,9 @@ function LeadModal({
   const [form, setForm] = useState<Draft>(toDraft(initial));
   const [custom, setCustom] = useState<Record<string, string>>(initial?.custom ?? {});
   const [error, setError] = useState("");
+  const productTypes = optionList(settings, "productTypes");
+  const customerTypes = optionList(settings, "customerTypes");
+  const enquiryNatures = optionList(settings, "enquiryNatures");
 
   const brandOptions = uniqueSorted([...brands.filter((b) => b.active).map((b) => b.name), initial?.productBrand]);
   const modelOptions = uniqueSorted([...products.map((p) => p.model), initial?.productModel]);
@@ -281,7 +288,7 @@ function LeadModal({
             Product Type
             <select value={form.productType} onChange={(e) => set("productType", e.target.value)} className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2">
               <option value="">— Select —</option>
-              {PRODUCT_TYPES.map((t) => (
+              {productTypes.map((t) => (
                 <option key={t} value={t}>{t}</option>
               ))}
             </select>
@@ -291,7 +298,7 @@ function LeadModal({
             Type of Customer
             <select value={form.sourceType} onChange={(e) => set("sourceType", e.target.value)} className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2">
               <option value="">— Select —</option>
-              {CUSTOMER_SOURCE_TYPES.map((t) => (
+              {customerTypes.map((t) => (
                 <option key={t} value={t}>{t}</option>
               ))}
             </select>
@@ -299,7 +306,7 @@ function LeadModal({
           <label className="text-sm font-semibold text-slate-700">
             Nature of Enquiry
             <select value={form.source} onChange={(e) => set("source", e.target.value as LeadSource)} className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2">
-              {SOURCES.map((s) => (
+              {enquiryNatures.map((s) => (
                 <option key={s}>{s}</option>
               ))}
             </select>

@@ -5,14 +5,12 @@ import { Plus, Trash2, UserPlus } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import type { Brand, CustomFieldDef, Customer, PaymentMode, Product, Purchase } from "@/types/crm";
+import type { Brand, CompanySettings, CustomFieldDef, Customer, PaymentMode, Product, Purchase } from "@/types/crm";
 import { Modal } from "@/components/ui";
 import { CustomFieldInputs } from "@/components/custom-fields";
-import { CUSTOMER_SOURCE_TYPES, PRODUCT_TYPES, uniqueSorted } from "@/lib/options";
+import { optionList, uniqueSorted } from "@/lib/options";
 import { purchaseBalance } from "@/lib/orders";
 import { currency } from "@/utils/format";
-
-const PAYMENT_MODES: PaymentMode[] = ["Cash", "UPI", "Bank Transfer", "Card", "Cheque", "Finance"];
 
 // Only Name and Phone are mandatory; every other customer field is optional.
 export const customerSchema = z.object({
@@ -29,7 +27,10 @@ export const customerSchema = z.object({
 
 export type CustomerForm = z.infer<typeof customerSchema>;
 
-export function CustomerModal({ initial, products, brands, customFields, onClose, onSave }: { initial: Customer | null; products: Product[]; brands: Brand[]; customFields?: CustomFieldDef[]; onClose: () => void; onSave: (customer: Customer) => void }) {
+export function CustomerModal({ initial, products, brands, settings, customFields, onClose, onSave }: { initial: Customer | null; products: Product[]; brands: Brand[]; settings: CompanySettings; customFields?: CustomFieldDef[]; onClose: () => void; onSave: (customer: Customer) => void }) {
+  const PAYMENT_MODES = optionList(settings, "paymentModes");
+  const productTypes = optionList(settings, "productTypes");
+  const customerTypes = optionList(settings, "customerTypes");
   const {
     register,
     handleSubmit,
@@ -155,7 +156,7 @@ export function CustomerModal({ initial, products, brands, customFields, onClose
             Product Type
             <select className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("productType")}>
               <option value="">— Select —</option>
-              {PRODUCT_TYPES.map((type) => (
+              {productTypes.map((type) => (
                 <option key={type} value={type}>{type}</option>
               ))}
             </select>
@@ -169,7 +170,7 @@ export function CustomerModal({ initial, products, brands, customFields, onClose
             Type of Customer
             <select className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" {...register("sourceType")}>
               <option value="">— Select —</option>
-              {CUSTOMER_SOURCE_TYPES.map((type) => (
+              {customerTypes.map((type) => (
                 <option key={type} value={type}>{type}</option>
               ))}
             </select>

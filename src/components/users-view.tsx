@@ -2,15 +2,15 @@
 
 import { Pencil, Save, Trash2, UserPlus } from "lucide-react";
 import { useState } from "react";
-import type { Role, User, UserStatus } from "@/types/crm";
+import type { CompanySettings, Role, User, UserStatus } from "@/types/crm";
 import { withHashedPassword } from "@/lib/password";
+import { optionList } from "@/lib/options";
 import { shortDate } from "@/utils/format";
 import { Badge, DataTable, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { cn } from "@/lib/utils";
 
 const ROLES: Role[] = ["Admin", "Staff"];
-const DEPARTMENTS = ["Management", "Sales", "Service", "Logistics", "Accounts"];
 
 type Draft = Omit<User, "id" | "password" | "passwordHash" | "passwordSalt"> & { id?: string; newPassword: string };
 
@@ -25,14 +25,17 @@ function emptyDraft(): Draft {
 export function UsersView({
   users,
   currentUserId,
+  settings,
   onChange
 }: {
   readonly users: User[];
   readonly currentUserId: string;
+  readonly settings: CompanySettings;
   readonly onChange: (users: User[]) => void;
 }) {
   const toast = useToast();
   const [editing, setEditing] = useState<Draft | null>(null);
+  const departments = optionList(settings, "departments");
 
   const activeCount = users.filter((user) => user.status === "Active").length;
   const staffCount = users.filter((user) => user.role === "Staff").length;
@@ -142,12 +145,12 @@ export function UsersView({
         ])}
       />
 
-      {editing && <UserModal draft={editing} onClose={() => setEditing(null)} onSave={save} />}
+      {editing && <UserModal draft={editing} departments={departments} onClose={() => setEditing(null)} onSave={save} />}
     </div>
   );
 }
 
-function UserModal({ draft, onClose, onSave }: { readonly draft: Draft; readonly onClose: () => void; readonly onSave: (draft: Draft) => Promise<string | null> }) {
+function UserModal({ draft, departments, onClose, onSave }: { readonly draft: Draft; readonly departments: string[]; readonly onClose: () => void; readonly onSave: (draft: Draft) => Promise<string | null> }) {
   const [form, setForm] = useState<Draft>(draft);
   const [error, setError] = useState("");
 
@@ -186,7 +189,7 @@ function UserModal({ draft, onClose, onSave }: { readonly draft: Draft; readonly
           <label className="text-sm font-semibold text-slate-700">
             Department
             <select value={form.department} onChange={(event) => set("department", event.target.value)} className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2">
-              {DEPARTMENTS.map((department) => (
+              {departments.map((department) => (
                 <option key={department}>{department}</option>
               ))}
             </select>

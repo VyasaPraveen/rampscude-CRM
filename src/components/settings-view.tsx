@@ -6,11 +6,12 @@ import type { CompanySettings, User } from "@/types/crm";
 import { Panel, SimpleRows } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { CustomFieldManager } from "@/components/custom-fields";
+import { OPTION_LISTS, optionList } from "@/lib/options";
 
 /** Max size for an uploaded logo / signature. Kept small — images are stored inline. */
 const MAX_IMAGE_BYTES = 400_000;
 
-type TextKey = Exclude<keyof CompanySettings, "logo" | "signature" | "gstRate" | "validityDays" | "gstSlabs" | "leadFields" | "customerFields">;
+type TextKey = Exclude<keyof CompanySettings, "logo" | "signature" | "gstRate" | "validityDays" | "gstSlabs" | "leadFields" | "customerFields" | "options">;
 
 const SECTIONS: { title: string; fields: { key: TextKey; label: string; wide?: boolean }[] }[] = [
   {
@@ -240,6 +241,20 @@ export function SettingsView({
         </div>
       </Panel>
 
+      <Panel title="Master Data — Dropdown Options">
+        <p className="mb-4 text-sm text-slate-500">Manage the choices used in dropdowns across every module. Changes apply everywhere those lists appear.</p>
+        <div className="grid gap-5 lg:grid-cols-2">
+          {OPTION_LISTS.map((list) => (
+            <OptionListEditor
+              key={list.id}
+              label={list.label}
+              values={optionList(form, list.id)}
+              onChange={(values) => set("options", { ...(form.options ?? {}), [list.id]: values })}
+            />
+          ))}
+        </div>
+      </Panel>
+
       <Panel title="Custom Fields">
         <p className="mb-3 text-sm text-slate-500">Add your own fields to the Lead and Customer forms — text, number, date or dropdown. They appear on those forms for every record.</p>
         <div className="grid gap-4 lg:grid-cols-2">
@@ -311,6 +326,53 @@ export function SettingsView({
         </p>
         <SimpleRows rows={users.map((user) => [user.name, user.email, `${user.role} · ${user.status}`])} />
       </Panel>
+    </div>
+  );
+}
+
+/** Chip editor for one admin-managed option list (add / remove choices). */
+function OptionListEditor({ label, values, onChange }: { readonly label: string; readonly values: string[]; readonly onChange: (values: string[]) => void }) {
+  const [draft, setDraft] = useState("");
+  function add() {
+    const value = draft.trim();
+    if (!value || values.some((item) => item.toLowerCase() === value.toLowerCase())) {
+      setDraft("");
+      return;
+    }
+    onChange([...values, value]);
+    setDraft("");
+  }
+  return (
+    <div className="rounded-lg border border-slate-200 p-4">
+      <p className="mb-2 text-sm font-bold text-slate-700">{label}</p>
+      <div className="mb-3 flex flex-wrap gap-2">
+        {values.length === 0 && <span className="text-xs text-slate-400">No options — add one below.</span>}
+        {values.map((value) => (
+          <span key={value} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-sm font-medium text-slate-700">
+            {value}
+            <button type="button" aria-label={`Remove ${value}`} onClick={() => onChange(values.filter((item) => item !== value))} className="text-slate-400 transition hover:text-red-600">
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </span>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <input
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              add();
+            }
+          }}
+          placeholder="Add option…"
+          className="h-10 flex-1 rounded-lg border border-slate-200 px-3 text-sm outline-none ring-blue-500 focus:ring-2"
+        />
+        <button type="button" onClick={add} className="inline-flex h-10 items-center gap-1 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-blue-700 hover:border-blue-300">
+          <Plus className="h-4 w-4" /> Add
+        </button>
+      </div>
     </div>
   );
 }

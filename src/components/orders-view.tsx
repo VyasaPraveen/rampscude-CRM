@@ -6,13 +6,13 @@ import type { CompanySettings, Customer, Order, OrderStatus, PaymentMode, Paymen
 import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { downloadOrderPdf } from "@/lib/export";
+import { optionList } from "@/lib/options";
 import { currency, shortDate } from "@/utils/format";
 
 const orderBalance = (order: Order) => Math.max(0, (order.amount ?? 0) - (order.advancePaid ?? 0));
 
 const ORDER_STATUSES: OrderStatus[] = ["Processing", "Ready", "Delivered", "Cancelled"];
 const PAYMENT_STATUSES: PaymentStatus[] = ["Pending", "Partial", "Paid"];
-const PAYMENT_MODES: PaymentMode[] = ["Cash", "UPI", "Bank Transfer", "Card", "Cheque", "Finance"];
 
 export function OrdersView({ orders, customers, settings, query, onChange }: { readonly orders: Order[]; readonly customers: Customer[]; readonly settings: CompanySettings; readonly query: string; readonly onChange: (orders: Order[]) => void }) {
   const toast = useToast();
@@ -84,12 +84,12 @@ export function OrdersView({ orders, customers, settings, query, onChange }: { r
           </div>
         ])}
       />
-      {editing !== null && <OrderModal initial={editing === "new" ? null : editing} customers={customers} count={orders.length} onClose={() => setEditing(null)} onSave={save} />}
+      {editing !== null && <OrderModal initial={editing === "new" ? null : editing} customers={customers} count={orders.length} paymentModes={optionList(settings, "paymentModes")} onClose={() => setEditing(null)} onSave={save} />}
     </div>
   );
 }
 
-function OrderModal({ initial, customers, count, onClose, onSave }: { readonly initial: Order | null; readonly customers: Customer[]; readonly count: number; readonly onClose: () => void; readonly onSave: (order: Order) => void }) {
+function OrderModal({ initial, customers, count, paymentModes, onClose, onSave }: { readonly initial: Order | null; readonly customers: Customer[]; readonly count: number; readonly paymentModes: string[]; readonly onClose: () => void; readonly onSave: (order: Order) => void }) {
   // Pre-fill the product/price from the customer's saved details so nothing is re-typed.
   const customerProduct = (id: string) => {
     const c = customers.find((item) => item.customerId === id);
@@ -148,7 +148,7 @@ function OrderModal({ initial, customers, count, onClose, onSave }: { readonly i
           <TextField label="Product / Model" value={productLabel} onChange={setProductLabel} />
           <TextField label="Price (₹, incl. GST)" value={amount} onChange={setAmount} type="number" />
           <TextField label="Advance Paid (₹)" value={advancePaid} onChange={setAdvancePaid} type="number" />
-          <SelectField label="Payment Mode" value={paymentMode} options={["", ...PAYMENT_MODES]} onChange={(v) => setPaymentMode(v as PaymentMode | "")} />
+          <SelectField label="Payment Mode" value={paymentMode} options={["", ...paymentModes]} onChange={(v) => setPaymentMode(v as PaymentMode | "")} />
           {linked && <p className="md:col-span-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700">This order mirrors a customer purchase — its price/advance are best edited on the customer or in Payments.</p>}
           <TextField label="Quotation Ref" value={quotationId} onChange={setQuotationId} />
           <TextField label="Delivery Date" value={deliveryDate} onChange={setDeliveryDate} type="date" />

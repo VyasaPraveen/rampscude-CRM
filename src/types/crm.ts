@@ -361,6 +361,9 @@ export interface CompanySettings {
   /** Admin-defined custom fields shown on the Lead and Customer forms. */
   leadFields?: CustomFieldDef[];
   customerFields?: CustomFieldDef[];
+  /** Admin-managed dropdown option lists, keyed by list id (see OPTION_LISTS).
+   *  When a list is present it overrides the built-in defaults for that dropdown. */
+  options?: Record<string, string[]>;
 }
 
 /** Display label for an inventory item. */

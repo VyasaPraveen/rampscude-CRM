@@ -5,7 +5,7 @@ import { useState } from "react";
 import type { Brand, CompanySettings, Product, ProductType } from "@/types/crm";
 import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
-import { PRODUCT_TYPES, uniqueSorted } from "@/lib/options";
+import { optionList, uniqueSorted } from "@/lib/options";
 import { currency } from "@/utils/format";
 
 /** Inventory: purchased stock units with brand, model, serial, price and purchase invoice. */
@@ -209,7 +209,7 @@ function InventoryModal({
             Product Type
             <select value={form.productType} onChange={(e) => set("productType", e.target.value)} className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2">
               <option value="">— Select —</option>
-              {PRODUCT_TYPES.map((type) => (
+              {optionList(settings, "productTypes").map((type) => (
                 <option key={type} value={type}>{type}</option>
               ))}
             </select>
