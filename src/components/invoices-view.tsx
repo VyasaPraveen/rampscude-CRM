@@ -2,14 +2,12 @@
 
 import { CheckCircle2, Download, FileText, FileUp, Pencil, Plus, Save, Send, UserPlus } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
-import type { Brand, CompanySettings, Customer, Invoice, PaymentMode, Purchase } from "@/types/crm";
+import type { Brand, CompanySettings, Customer, Invoice, Purchase } from "@/types/crm";
 import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { currency, shortDate } from "@/utils/format";
 import { downloadCSV, downloadInvoicePdf } from "@/lib/export";
 import { cn } from "@/lib/utils";
-
-const PAYMENT_MODES: PaymentMode[] = ["Cash", "UPI", "Bank Transfer", "Card", "Cheque", "Finance"];
 
 /** Format a date, falling back to the raw string for non-ISO values (e.g. Tally "1-Apr-2026"). */
 function safeDate(value: string): string {
