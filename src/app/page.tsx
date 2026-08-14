@@ -1076,7 +1076,7 @@ export default function Page() {
           {activeModule === "invoices" && <InvoicesView invoices={invoiceList} customers={customerList} brands={brandList} settings={settings} query={globalSearch} onChange={updateInvoices} />}
           {activeModule === "services" && <ServicesView services={serviceList} customers={customerList} brands={brandList} query={globalSearch} onChange={updateServices} />}
           {activeModule === "attendance" && <AttendanceView users={userList} records={attendance} onChange={updateAttendance} />}
-          {activeModule === "payments" && <PaymentsView payments={paymentList} customers={customerList} query={globalSearch} onChange={updatePayments} />}
+          {activeModule === "payments" && <PaymentsView payments={paymentList} customers={customerList} settings={settings} query={globalSearch} onChange={updatePayments} />}
           {activeModule === "users" && isAdmin && <UsersView users={userList} currentUserId={currentUser.id} settings={settings} onChange={updateUsers} />}
           {activeModule === "reports" && <ReportsView customers={customerList} products={inventory} brands={brandList} settings={settings} quotations={quotationList} leads={leadList} invoices={invoiceList} orders={orderList} payments={paymentList} services={serviceList} />}
           {activeModule === "settings" && <SettingsView settings={settings} users={userList} onChange={updateSettings} onBackup={downloadBackupNow} onRestore={restoreBackup} lastManualBackup={lastManualBackupDay() || undefined} licenseUntil={license?.validUntil} />}

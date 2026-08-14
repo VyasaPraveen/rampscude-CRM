@@ -2,12 +2,11 @@
 
 import { Pencil, Plus, Save } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { Customer, Payment, PaymentMode, PaymentStatus } from "@/types/crm";
+import type { CompanySettings, Customer, Payment, PaymentMode, PaymentStatus } from "@/types/crm";
 import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
+import { optionList } from "@/lib/options";
 import { currency } from "@/utils/format";
-
-const PAYMENT_MODES: PaymentMode[] = ["Cash", "UPI", "Bank Transfer", "Card", "Cheque", "Finance"];
 
 function statusFor(invoiceAmount: number, paidAmount: number): PaymentStatus {
   if (paidAmount >= invoiceAmount && invoiceAmount > 0) return "Paid";
@@ -15,7 +14,7 @@ function statusFor(invoiceAmount: number, paidAmount: number): PaymentStatus {
   return "Pending";
 }
 
-export function PaymentsView({ payments, customers, query, onChange }: { readonly payments: Payment[]; readonly customers: Customer[]; readonly query: string; readonly onChange: (payments: Payment[]) => void }) {
+export function PaymentsView({ payments, customers, settings, query, onChange }: { readonly payments: Payment[]; readonly customers: Customer[]; readonly settings: CompanySettings; readonly query: string; readonly onChange: (payments: Payment[]) => void }) {
   const toast = useToast();
   const [editing, setEditing] = useState<Payment | null | "new">(null);
   const nameOf = (id: string) => {
@@ -71,12 +70,12 @@ export function PaymentsView({ payments, customers, query, onChange }: { readonl
           </div>
         ])}
       />
-      {editing !== null && <PaymentModal initial={editing === "new" ? null : editing} customers={customers} count={payments.length} onClose={() => setEditing(null)} onSave={save} />}
+      {editing !== null && <PaymentModal initial={editing === "new" ? null : editing} customers={customers} count={payments.length} paymentModes={optionList(settings, "paymentModes")} onClose={() => setEditing(null)} onSave={save} />}
     </div>
   );
 }
 
-function PaymentModal({ initial, customers, count, onClose, onSave }: { readonly initial: Payment | null; readonly customers: Customer[]; readonly count: number; readonly onClose: () => void; readonly onSave: (payment: Payment) => void }) {
+function PaymentModal({ initial, customers, count, paymentModes, onClose, onSave }: { readonly initial: Payment | null; readonly customers: Customer[]; readonly count: number; readonly paymentModes: string[]; readonly onClose: () => void; readonly onSave: (payment: Payment) => void }) {
   const [customerId, setCustomerId] = useState(initial?.customerId ?? customers[0]?.customerId ?? "");
   const [invoiceNumber, setInvoiceNumber] = useState(initial?.invoiceNumber ?? "");
   const [invoiceAmount, setInvoiceAmount] = useState(initial ? String(initial.invoiceAmount) : "");
@@ -139,7 +138,7 @@ function PaymentModal({ initial, customers, count, onClose, onSave }: { readonly
             Payment Mode
             <select value={paymentMode} onChange={(e) => setPaymentMode(e.target.value as PaymentMode | "")} className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2">
               <option value="">— Select —</option>
-              {PAYMENT_MODES.map((m) => (
+              {paymentModes.map((m) => (
                 <option key={m} value={m}>{m}</option>
               ))}
             </select>
