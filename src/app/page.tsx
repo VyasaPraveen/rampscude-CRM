@@ -337,12 +337,19 @@ export default function Page() {
       }
     };
 
-    // Replace any plaintext credentials with PBKDF2 hashes, then persist the upgrade.
+    // Replace any plaintext credentials with PBKDF2 hashes. Apply the hashes on top
+    // of whatever users we currently hold — the initial sync may have added accounts
+    // created on other devices since mount — and save LOCALLY ONLY. Pushing here
+    // would republish this device's possibly stale/seed list (e.g. a phone sitting on
+    // the login screen holds just the seed admin) and delete users created elsewhere.
     void upgradeStoredPasswords(users).then((upgraded) => {
-      if (upgraded !== users) {
-        setUserList(upgraded);
-        persist(STORAGE_KEYS.users, upgraded);
-      }
+      if (upgraded === users) return;
+      const hashedById = new Map(upgraded.map((user) => [user.id, user]));
+      setUserList((currentUsers) => {
+        const merged = currentUsers.map((user) => hashedById.get(user.id) ?? user);
+        saveState(STORAGE_KEYS.users, merged);
+        return merged;
+      });
     });
 
     const unsubscribe = subscribeWorkspace(Object.keys(cached), applyRemote, (key) => {
