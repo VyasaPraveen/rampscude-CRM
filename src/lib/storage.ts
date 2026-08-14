@@ -18,6 +18,8 @@ export const STORAGE_KEYS = {
   payments: "rc_payments",
   brands: "rc_brands",
   settings: "rc_settings",
+  license: "rc_license",
+  lastBackup: "rc_last_backup",
   dataVersion: "rc_data_version"
 } as const;
 

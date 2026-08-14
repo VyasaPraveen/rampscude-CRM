@@ -311,6 +311,19 @@ export interface CustomFieldDef {
   options?: string[];
 }
 
+/** Yearly licence for this CRM install. Stored once, in the synced workspace, and
+ *  never removed — renewal replaces it with a key carrying a later expiry. */
+export interface LicenseRecord {
+  /** The signed licence key the admin entered. */
+  key: string;
+  /** Term start (YYYY-MM-DD) — informational. */
+  validFrom: string;
+  /** Term end (YYYY-MM-DD, inclusive) — the CRM hard-locks after this day. */
+  validUntil: string;
+  /** When the key was first activated on this install. */
+  activatedAt: string;
+}
+
 /** Organisation profile used across quotations, invoices and reports. */
 export interface CompanySettings {
   name: string;

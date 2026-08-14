@@ -44,10 +44,12 @@ import {
   services as serviceSeed,
   users as userSeed
 } from "@/lib/seed-data";
-import type { AttendanceRecord, Brand, CompanySettings, Customer, Invoice, Lead, Order, Payment, Product, Purchase, Quotation, ServiceRequest, User } from "@/types/crm";
+import type { AttendanceRecord, Brand, CompanySettings, Customer, Invoice, Lead, LicenseRecord, Order, Payment, Product, Purchase, Quotation, ServiceRequest, User } from "@/types/crm";
 import { cn } from "@/lib/utils";
 import { computeTotals, rateForProduct } from "@/lib/gst";
 import { syncOrdersFromCustomer, syncPaymentsFromCustomer } from "@/lib/orders";
+import { evaluateLicense, licenseRecordFromKey, verifyLicenseKey, type LicenseStatus } from "@/lib/license";
+import { LicenseScreen } from "@/components/license-screen";
 import { Dashboard } from "@/components/dashboard-view";
 import { useToast } from "@/components/toast";
 
@@ -185,6 +187,11 @@ export default function Page() {
   const [brandList, setBrandList] = useState<Brand[]>(brandSeed);
   const [settings, setSettings] = useState<CompanySettings>(settingsSeed);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
+  // Yearly licence gate. `licenseStatus` starts "checking" so we never flash the
+  // lock screen before the stored/synced licence has been evaluated.
+  const [license, setLicense] = useState<LicenseRecord | null>(null);
+  const [licenseStatus, setLicenseStatus] = useState<LicenseStatus>("checking");
+  const licenseResolvedRef = useRef(false);
   // Tracks leads currently being converted, to make convert idempotent against double-clicks.
   const convertingRef = useRef<Set<string>>(new Set());
   const [editingCustomer, setEditingCustomer] = useState<Customer | null | "new">(null);
@@ -250,7 +257,18 @@ export default function Page() {
       [STORAGE_KEYS.brands]: loadState(STORAGE_KEYS.brands, brandSeed),
       [STORAGE_KEYS.users]: loadState(STORAGE_KEYS.users, userSeed),
       [STORAGE_KEYS.attendance]: loadState<AttendanceRecord[]>(STORAGE_KEYS.attendance, []),
-      [STORAGE_KEYS.settings]: { ...settingsSeed, ...loadState<Partial<CompanySettings>>(STORAGE_KEYS.settings, {}) }
+      [STORAGE_KEYS.settings]: { ...settingsSeed, ...loadState<Partial<CompanySettings>>(STORAGE_KEYS.settings, {}) },
+      [STORAGE_KEYS.license]: loadState<LicenseRecord | null>(STORAGE_KEYS.license, null)
+    };
+
+    // Evaluate a licence record now and reflect it in the gate. Marks the licence
+    // as resolved so the "checking" screen can give way to the app or lock screen.
+    const resolveLicense = (record: LicenseRecord | null) => {
+      void evaluateLicense(record, Date.now()).then((status) => {
+        licenseResolvedRef.current = true;
+        setLicense(record);
+        setLicenseStatus(status);
+      });
     };
 
     const users = cached[STORAGE_KEYS.users] as User[];
@@ -266,6 +284,13 @@ export default function Page() {
     setAttendance(cached[STORAGE_KEYS.attendance] as AttendanceRecord[]);
     setSettings(cached[STORAGE_KEYS.settings] as CompanySettings);
     setUserList(users);
+
+    // Evaluate the cached licence immediately. If there is none cached, stay in the
+    // "checking" state until the initial sync delivers it (or reports it missing),
+    // so a device that will receive its licence from the server never flashes the
+    // lock screen.
+    const cachedLicense = cached[STORAGE_KEYS.license] as LicenseRecord | null;
+    if (cachedLicense) resolveLicense(cachedLicense);
 
     // Restore the session from the LIVE user record (not the stored snapshot) so a
     // removed, deactivated, or role-changed account cannot linger via localStorage.
@@ -332,6 +357,9 @@ export default function Page() {
         case STORAGE_KEYS.settings:
           setSettings({ ...settingsSeed, ...(value as Partial<CompanySettings>) });
           break;
+        case STORAGE_KEYS.license:
+          resolveLicense(value as LicenseRecord | null);
+          break;
         default:
           break;
       }
@@ -353,11 +381,31 @@ export default function Page() {
     });
 
     const unsubscribe = subscribeWorkspace(Object.keys(cached), applyRemote, (key) => {
-      void pushDoc(key, cached[key]); // fresh workspace: publish this device's data
+      // The workspace has no row for this key yet. The licence is never auto-created
+      // (an unlicensed install must show the activation screen); everything else this
+      // device holds is published to seed a fresh workspace.
+      if (key === STORAGE_KEYS.license) {
+        if (!licenseResolvedRef.current) {
+          licenseResolvedRef.current = true;
+          setLicenseStatus("unlicensed");
+        }
+        return;
+      }
+      void pushDoc(key, cached[key]);
     });
+
+    // Offline / sync error: nothing will resolve the licence, so fall back to the
+    // cached verdict (unlicensed when there is no cache) rather than hang on "checking".
+    const licenseTimer = setTimeout(() => {
+      if (!licenseResolvedRef.current) {
+        licenseResolvedRef.current = true;
+        setLicenseStatus((current) => (current === "checking" ? "unlicensed" : current));
+      }
+    }, 12_000);
 
     return () => {
       unsubscribe();
+      clearTimeout(licenseTimer);
     };
   }, []);
 
@@ -380,6 +428,26 @@ export default function Page() {
     saveState(STORAGE_KEYS.auth, null);
     setCurrentUser(null);
     setActiveModule("dashboard");
+  }
+
+  /** Activate or renew the licence from a vendor key. Stored (locked) in the synced
+   *  workspace so it applies to every device and cannot be removed — only renewed. */
+  async function activateLicense(rawKey: string): Promise<string | null> {
+    const verified = await verifyLicenseKey(rawKey);
+    if (!verified) return "Invalid licence key. Please check it and try again.";
+    const record = licenseRecordFromKey(rawKey, verified.from, verified.until, new Date().toISOString());
+    const status = await evaluateLicense(record, Date.now());
+    if (status === "expired") return "This key has already expired. Please enter a current renewal key.";
+    // Do not let a wrong key shorten an existing term.
+    if (license && new Date(record.validUntil).getTime() < new Date(license.validUntil).getTime()) {
+      return "This key ends earlier than the licence already active. Enter the latest renewal key.";
+    }
+    licenseResolvedRef.current = true;
+    setLicense(record);
+    setLicenseStatus(status);
+    store(STORAGE_KEYS.license, record);
+    toast("Licence activated.");
+    return null;
   }
 
   function saveCustomer(customer: Customer) {
@@ -759,6 +827,18 @@ export default function Page() {
     return <main className="min-h-screen bg-[#F8FAFC]" aria-hidden />;
   }
 
+  // Licence gate — evaluated before auth. "checking" holds a neutral screen until
+  // the stored/synced licence is verified; expired/unlicensed hard-block the CRM.
+  if (licenseStatus === "checking") {
+    return <main className="grid min-h-screen place-items-center bg-slate-950 text-sm text-slate-400" aria-busy="true">Checking licence…</main>;
+  }
+  if (licenseStatus === "expired") {
+    return <LicenseScreen expired validUntil={license?.validUntil} onActivate={activateLicense} />;
+  }
+  if (licenseStatus === "unlicensed" || licenseStatus === "invalid") {
+    return <LicenseScreen expired={false} onActivate={activateLicense} />;
+  }
+
   if (!currentUser) {
     return <LoginScreen onLogin={handleLogin} />;
   }
@@ -880,6 +960,11 @@ export default function Page() {
         </header>
 
         <section className="p-4 lg:p-8">
+          {licenseStatus === "renew-soon" && license && (
+            <p className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900" role="status">
+              Your CRM licence expires on <span className="font-bold">{new Date(license.validUntil).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</span>. Please renew before then to avoid interruption — the CRM locks after this date.
+            </p>
+          )}
           {syncStatus === "connecting" && (
             <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800" role="status">
               Loading your workspace… showing this device&apos;s saved data until the cloud responds.
