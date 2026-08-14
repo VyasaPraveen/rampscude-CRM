@@ -801,47 +801,81 @@ export default function Page() {
   }
 
   function updatePayments(next: Payment[]) {
-    // Two-way sync: an edit to a purchase-linked payment flows back onto the
-    // customer's purchase, and Orders is re-synced so all three modules agree.
+    // A payment recorded/updated here is written onto the customer's purchase so the
+    // customer's balance, their order and the payment mirror always agree — the client
+    // enters it once in Payments and it reflects everywhere. A payment that introduces
+    // a purchase the customer doesn't have yet (a fresh "Record Payment") creates one.
     let customers = customerList;
-    let orders = orderList;
+    const affected = new Set<string>();
     let changed = false;
     next.forEach((pay) => {
-      if (!pay.purchaseId) return;
+      if (!pay.purchaseId || !pay.customerId) return;
       const owner = customers.find((c) => (c.purchases ?? []).some((p) => p.purchaseId === pay.purchaseId));
-      const purchase = owner?.purchases?.find((p) => p.purchaseId === pay.purchaseId);
-      if (!owner || !purchase) return;
-      const same =
-        (purchase.price || 0) === (pay.invoiceAmount || 0) &&
-        (purchase.advancePaid || 0) === (pay.paidAmount || 0) &&
-        (purchase.dueDate ?? "") === (pay.dueDate ?? "") &&
-        (purchase.paymentMode ?? "") === (pay.paymentMode ?? "");
-      if (same) return;
-      changed = true;
-      const updated: Purchase = {
-        ...purchase,
-        price: pay.invoiceAmount || 0,
-        advancePaid: pay.paidAmount || 0,
-        dueDate: pay.dueDate || undefined,
-        paymentMode: pay.paymentMode
-      };
-      customers = customers.map((c) =>
-        c.customerId === owner.customerId
-          ? { ...c, purchases: (c.purchases ?? []).map((p) => (p.purchaseId === purchase.purchaseId ? updated : p)) }
-          : c
-      );
+      if (owner) {
+        const purchase = owner.purchases?.find((p) => p.purchaseId === pay.purchaseId);
+        if (!purchase) return;
+        const same =
+          (purchase.price || 0) === (pay.invoiceAmount || 0) &&
+          (purchase.advancePaid || 0) === (pay.paidAmount || 0) &&
+          (purchase.dueDate ?? "") === (pay.dueDate ?? "") &&
+          (purchase.paymentMode ?? "") === (pay.paymentMode ?? "");
+        if (same) return;
+        changed = true;
+        affected.add(owner.customerId);
+        const updated: Purchase = {
+          ...purchase,
+          price: pay.invoiceAmount || 0,
+          advancePaid: Math.min(pay.invoiceAmount || 0, pay.paidAmount || 0),
+          dueDate: pay.dueDate || undefined,
+          paymentMode: pay.paymentMode
+        };
+        customers = customers.map((c) =>
+          c.customerId === owner.customerId
+            ? { ...c, purchases: (c.purchases ?? []).map((p) => (p.purchaseId === purchase.purchaseId ? updated : p)) }
+            : c
+        );
+      } else {
+        // The purchase doesn't exist yet — a payment recorded against a customer in the
+        // Payments module. Attach it as a new purchase so it reflects on the customer.
+        const target = customers.find((c) => c.customerId === pay.customerId);
+        if (!target) return;
+        changed = true;
+        affected.add(target.customerId);
+        const created: Purchase = {
+          purchaseId: pay.purchaseId,
+          productModel: pay.productLabel || undefined,
+          price: pay.invoiceAmount || 0,
+          advancePaid: Math.min(pay.invoiceAmount || 0, pay.paidAmount || 0),
+          dueDate: pay.dueDate || undefined,
+          paymentMode: pay.paymentMode,
+          createdAt: pay.createdAt ?? new Date().toISOString()
+        };
+        customers = customers.map((c) =>
+          c.customerId === target.customerId ? { ...c, purchases: [...(c.purchases ?? []), created] } : c
+        );
+      }
     });
-    setPaymentList(next);
-    store(STORAGE_KEYS.payments, next);
-    if (changed) {
-      setCustomerList(customers);
-      store(STORAGE_KEYS.customers, customers);
-      customers.forEach((c) => {
-        orders = syncOrdersFromCustomer(c, orders);
-      });
-      setOrderList(orders);
-      store(STORAGE_KEYS.orders, orders);
+
+    if (!changed) {
+      setPaymentList(next);
+      store(STORAGE_KEYS.payments, next);
+      return;
     }
+    setCustomerList(customers);
+    store(STORAGE_KEYS.customers, customers);
+    // Re-derive Orders and the payment mirrors from the affected customers so all three
+    // modules are canonical and consistent (idempotent — no oscillation).
+    let orders = orderList;
+    let payments = next;
+    customers.forEach((c) => {
+      if (!affected.has(c.customerId)) return;
+      orders = syncOrdersFromCustomer(c, orders);
+      payments = syncPaymentsFromCustomer(c, payments);
+    });
+    setOrderList(orders);
+    store(STORAGE_KEYS.orders, orders);
+    setPaymentList(payments);
+    store(STORAGE_KEYS.payments, payments);
   }
 
   function saveQuotation(quotation: Quotation) {

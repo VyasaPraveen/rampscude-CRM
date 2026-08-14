@@ -2,10 +2,11 @@
 
 import { Pencil, Plus, Save } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { CompanySettings, Customer, Payment, PaymentMode, PaymentStatus } from "@/types/crm";
+import type { CompanySettings, Customer, Payment, PaymentMode, PaymentStatus, Purchase } from "@/types/crm";
 import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { optionList } from "@/lib/options";
+import { purchasePaymentId } from "@/lib/orders";
 import { currency } from "@/utils/format";
 
 function statusFor(invoiceAmount: number, paidAmount: number): PaymentStatus {
@@ -26,10 +27,15 @@ export function PaymentsView({ payments, customers, settings, query, onChange }:
   const outstanding = payments.reduce((sum, item) => sum + item.balanceAmount, 0);
 
   function save(payment: Payment) {
-    const exists = payments.some((item) => item.paymentId === payment.paymentId);
-    onChange(exists ? payments.map((item) => (item.paymentId === payment.paymentId ? payment : item)) : [payment, ...payments]);
+    // The row being edited may change its id (e.g. a general payment re-linked to a
+    // purchase), so drop the original row and any existing entry with the new id,
+    // then add the payment. onChange (updatePayments) syncs it onto the customer.
+    const editingId = editing && editing !== "new" ? editing.paymentId : null;
+    const existed = payments.some((item) => item.paymentId === payment.paymentId || item.paymentId === editingId);
+    const rest = payments.filter((item) => item.paymentId !== payment.paymentId && item.paymentId !== editingId);
+    onChange([payment, ...rest]);
     setEditing(null);
-    toast(exists ? `Payment updated for ${payment.invoiceNumber}` : `Payment recorded for ${payment.invoiceNumber}`);
+    toast(existed ? `Payment updated for ${payment.invoiceNumber}` : `Payment recorded for ${payment.invoiceNumber}`);
   }
 
   function remove(payment: Payment) {
@@ -76,16 +82,25 @@ export function PaymentsView({ payments, customers, settings, query, onChange }:
   );
 }
 
+const NEW_PURCHASE = "__new__";
+const purchaseLabelOf = (p: Purchase) => [p.productBrand, p.productModel].filter(Boolean).join(" ").trim() || "Purchase";
+
 function PaymentModal({ initial, customers, count, paymentModes, onClose, onSave }: { readonly initial: Payment | null; readonly customers: Customer[]; readonly count: number; readonly paymentModes: string[]; readonly onClose: () => void; readonly onSave: (payment: Payment) => void }) {
-  const [customerId, setCustomerId] = useState(initial?.customerId ?? customers[0]?.customerId ?? "");
-  const [invoiceNumber, setInvoiceNumber] = useState(initial?.invoiceNumber ?? "");
-  const [invoiceAmount, setInvoiceAmount] = useState(initial ? String(initial.invoiceAmount) : "");
-  const [paidAmount, setPaidAmount] = useState(initial ? String(initial.paidAmount) : "");
-  const [dueDate, setDueDate] = useState(initial?.dueDate ?? new Date().toISOString().slice(0, 10));
-  const [paymentMode, setPaymentMode] = useState<PaymentMode | "">(initial?.paymentMode ?? "");
-  const [error, setError] = useState("");
-  // A payment mirrored from a customer purchase — its product & customer are owned there.
+  // A payment mirrored from a customer purchase is bound to that customer & purchase.
   const linked = Boolean(initial?.purchaseId);
+  const [customerId, setCustomerId] = useState(initial?.customerId ?? customers[0]?.customerId ?? "");
+  const customer = customers.find((c) => c.customerId === customerId);
+  const purchases = customer?.purchases ?? [];
+  // For a fresh payment, default to (and prefill from) the customer's first purchase.
+  const seedPurchase = initial ? undefined : purchases[0];
+  // Which purchase this payment applies to — an existing purchase id, or a new one.
+  const [purchaseChoice, setPurchaseChoice] = useState<string>(initial?.purchaseId ?? seedPurchase?.purchaseId ?? NEW_PURCHASE);
+  const [invoiceNumber, setInvoiceNumber] = useState(initial?.invoiceNumber ?? "");
+  const [invoiceAmount, setInvoiceAmount] = useState(initial ? String(initial.invoiceAmount) : seedPurchase ? String(seedPurchase.price || 0) : "");
+  const [paidAmount, setPaidAmount] = useState(initial ? String(initial.paidAmount) : seedPurchase ? String(seedPurchase.advancePaid || 0) : "");
+  const [dueDate, setDueDate] = useState(initial?.dueDate ?? seedPurchase?.dueDate ?? new Date().toISOString().slice(0, 10));
+  const [paymentMode, setPaymentMode] = useState<PaymentMode | "">(initial?.paymentMode ?? seedPurchase?.paymentMode ?? "");
+  const [error, setError] = useState("");
 
   const { balance, status } = useMemo(() => {
     const inv = Math.max(0, Number(invoiceAmount) || 0);
@@ -93,13 +108,36 @@ function PaymentModal({ initial, customers, count, paymentModes, onClose, onSave
     return { balance: inv - paid, status: statusFor(inv, paid) };
   }, [invoiceAmount, paidAmount]);
 
+  // Prefill the money fields from a chosen purchase (only when recording a new payment;
+  // when editing we keep whatever is already entered).
+  function choosePurchase(list: Purchase[], pid: string, prefill: boolean) {
+    setPurchaseChoice(pid);
+    if (!prefill) return;
+    const p = list.find((x) => x.purchaseId === pid);
+    setInvoiceAmount(p ? String(p.price || 0) : "");
+    setPaidAmount(p ? String(p.advancePaid || 0) : "");
+    setDueDate(p?.dueDate ?? new Date().toISOString().slice(0, 10));
+    setPaymentMode(p?.paymentMode ?? "");
+  }
+
+  function pickCustomer(id: string) {
+    setCustomerId(id);
+    const list = customers.find((x) => x.customerId === id)?.purchases ?? [];
+    choosePurchase(list, list[0]?.purchaseId ?? NEW_PURCHASE, !initial);
+  }
+
   function submit() {
     if (!customerId) return setError("Select a customer.");
     const inv = Math.max(0, Number(invoiceAmount) || 0);
     if (inv <= 0) return setError("Enter the invoice amount.");
     const paid = Math.min(inv, Math.max(0, Number(paidAmount) || 0));
+    // Bind the payment to a customer purchase (existing or a fresh one) so Customers,
+    // Orders and Payments all stay in step — the client never re-enters this anywhere.
+    const useExisting = purchaseChoice !== NEW_PURCHASE && purchases.some((p) => p.purchaseId === purchaseChoice);
+    const purchaseId = useExisting ? purchaseChoice : initial?.purchaseId ?? `PUR-${Date.now()}-${Math.floor(Math.random() * 1e4)}`;
+    const chosen = purchases.find((p) => p.purchaseId === purchaseId);
     onSave({
-      paymentId: initial?.paymentId ?? `PAY-${Date.now()}`,
+      paymentId: purchasePaymentId(purchaseId),
       customerId,
       invoiceNumber: invoiceNumber.trim() || `RC/INV/2026/${String(count + 1).padStart(3, "0")}`,
       invoiceAmount: inv,
@@ -107,9 +145,8 @@ function PaymentModal({ initial, customers, count, paymentModes, onClose, onSave
       balanceAmount: inv - paid,
       dueDate,
       status: statusFor(inv, paid),
-      // Preserve the link back to the customer purchase so two-way sync keeps working.
-      purchaseId: initial?.purchaseId,
-      productLabel: initial?.productLabel,
+      purchaseId,
+      productLabel: chosen ? purchaseLabelOf(chosen) : initial?.productLabel,
       paymentMode: paymentMode || undefined,
       createdAt: initial?.createdAt ?? new Date().toISOString()
     });
@@ -118,17 +155,24 @@ function PaymentModal({ initial, customers, count, paymentModes, onClose, onSave
   return (
     <Modal title={initial ? "Update Payment" : "Record Payment"} size="lg" onClose={onClose}>
         <div className="grid gap-4 md:grid-cols-2">
-          {linked && (
-            <p className="md:col-span-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700">
-              Linked to a customer purchase{initial?.productLabel ? ` (${initial.productLabel})` : ""} — changes here update the customer &amp; order automatically.
-            </p>
-          )}
-          <label className="text-sm font-semibold text-slate-700 md:col-span-2">
+          <p className="md:col-span-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700">
+            This payment is saved on the customer, so it updates the customer&apos;s balance and their order automatically — no need to re-enter it anywhere.
+          </p>
+          <label className="text-sm font-semibold text-slate-700">
             Customer
-            <select value={customerId} onChange={(e) => setCustomerId(e.target.value)} className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2">
+            <select value={customerId} disabled={linked} onChange={(e) => pickCustomer(e.target.value)} className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2 disabled:bg-slate-100 disabled:text-slate-500">
               {customers.map((c) => (
                 <option key={c.customerId} value={c.customerId}>{c.companyName || c.customerName}</option>
               ))}
+            </select>
+          </label>
+          <label className="text-sm font-semibold text-slate-700">
+            Against
+            <select value={purchaseChoice} disabled={linked} onChange={(e) => choosePurchase(purchases, e.target.value, !initial)} className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2 disabled:bg-slate-100 disabled:text-slate-500">
+              {purchases.map((p) => (
+                <option key={p.purchaseId} value={p.purchaseId}>{purchaseLabelOf(p)} — bal {currency(Math.max(0, (p.price || 0) - (p.advancePaid || 0)))}</option>
+              ))}
+              <option value={NEW_PURCHASE}>➕ New purchase / general payment</option>
             </select>
           </label>
           <Field label="Invoice No" value={invoiceNumber} onChange={setInvoiceNumber} />
