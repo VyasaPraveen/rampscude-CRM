@@ -226,19 +226,26 @@ function TriCheckbox({ checked, indeterminate, onChange, label }: { readonly che
  * `onDeleteSelected` turns on bulk selection: a checkbox column, a select-all
  * header and a two-step "Delete selected" bar. Ids are stable per record, so a
  * selection survives filtering/paging and never targets the wrong row.
+ *
+ * Passing `rowIds` with `onRowClick` makes each row clickable (e.g. click the
+ * entry to edit it). Clicks landing on a button, link, input or select inside the
+ * row are ignored, so the Edit/Delete buttons and the select checkbox keep working.
  */
 export function DataTable({
   columns,
   rows,
   rowIds,
-  onDeleteSelected
+  onDeleteSelected,
+  onRowClick
 }: {
   readonly columns: string[];
   readonly rows: ReactNode[][];
   readonly rowIds?: string[];
   readonly onDeleteSelected?: (ids: string[]) => void;
+  readonly onRowClick?: (id: string) => void;
 }) {
   const bulk = Boolean(rowIds && onDeleteSelected);
+  const hasIds = Boolean(rowIds);
   const allIds = rowIds ?? [];
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -271,7 +278,7 @@ export function DataTable({
   const current = Math.min(page, pageCount - 1);
   const start = rows.length > PAGE_SIZE ? current * PAGE_SIZE : 0;
   const visible = rows.length > PAGE_SIZE ? rows.slice(start, start + PAGE_SIZE) : rows;
-  const visibleIds = bulk ? (rows.length > PAGE_SIZE ? allIds.slice(start, start + PAGE_SIZE) : allIds) : [];
+  const visibleIds = hasIds ? (rows.length > PAGE_SIZE ? allIds.slice(start, start + PAGE_SIZE) : allIds) : [];
 
   const allSelected = allIds.length > 0 && selected.size === allIds.length;
   const colSpan = columns.length + (bulk ? 1 : 0);
@@ -354,8 +361,22 @@ export function DataTable({
               visible.map((row, rowIndex) => {
                 const id = visibleIds[rowIndex];
                 const checked = bulk ? selected.has(id) : false;
+                const clickable = Boolean(onRowClick && id);
                 return (
-                  <tr key={bulk ? id : rowIndex} className={cn("hover:bg-blue-50/50", checked && "bg-blue-50/60")}>
+                  <tr
+                    key={hasIds ? id : rowIndex}
+                    onClick={
+                      clickable
+                        ? (event) => {
+                            // Ignore clicks on the row's own controls (Edit/Delete buttons, the
+                            // select checkbox, links or selects) so only "empty" cells open the editor.
+                            if (!(event.target as HTMLElement).closest("button, a, input, select, textarea")) onRowClick!(id);
+                          }
+                        : undefined
+                    }
+                    title={clickable ? "Click to edit" : undefined}
+                    className={cn("hover:bg-blue-50/50", checked && "bg-blue-50/60", clickable && "cursor-pointer")}
+                  >
                     {bulk && (
                       <td className="w-10 px-4 py-4">
                         <TriCheckbox checked={checked} onChange={() => toggleOne(id)} label="Select row" />

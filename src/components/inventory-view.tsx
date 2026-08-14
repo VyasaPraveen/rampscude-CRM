@@ -59,6 +59,7 @@ export function InventoryView({
         columns={["Brand", "Model", "Type", "Qty", "Purchase", "Sale", "Status", "Action"]}
         rowIds={rows.map((item) => item.productId)}
         onDeleteSelected={removeMany}
+        onRowClick={(id) => setEditing(products.find((item) => item.productId === id) ?? null)}
         rows={rows.map((item) => [
           <span key="b" className="font-semibold text-slate-900">{item.brand}</span>,
           item.model,

@@ -114,6 +114,7 @@ export function LeadsView({
         columns={["Name", "Town", "Phone", "Nature of Enquiry", "Quoted Price", "Status", "Added", "Action"]}
         rowIds={rows.map((item) => item.leadId)}
         onDeleteSelected={removeMany}
+        onRowClick={(id) => setEditing(leads.find((item) => item.leadId === id) ?? null)}
         rows={rows.map((item) => [
           <span key="n" className="font-semibold text-slate-900">{item.name}</span>,
           item.town || "—",

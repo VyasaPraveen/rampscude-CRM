@@ -311,6 +311,7 @@ export function InvoicesView({
         columns={["Invoice", "Customer", "Town", "Date", "Amount", "Source", "Created", "Shared", "PDF", "Action"]}
         rowIds={rows.map((item) => item.invoiceId)}
         onDeleteSelected={removeMany}
+        onRowClick={(id) => setEditing(invoices.find((item) => item.invoiceId === id) ?? null)}
         rows={rows.map((item) => [
           <span key="n" className="font-semibold text-slate-900">{item.invoiceNumber}</span>,
           item.customerName,

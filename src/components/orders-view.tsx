@@ -1,7 +1,7 @@
 "use client";
 
 import { Pencil, Plus, Printer, Save } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { CompanySettings, Customer, Order, OrderStatus, PaymentMode, PaymentStatus } from "@/types/crm";
 import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
@@ -62,6 +62,7 @@ export function OrdersView({ orders, customers, settings, query, onChange }: { r
         columns={["Order", "Customer", "Product", "Amount", "Advance", "Balance", "Delivery", "Payment", "Mode", "Status", "Action"]}
         rowIds={rows.map((item) => item.orderId)}
         onDeleteSelected={removeMany}
+        onRowClick={(id) => setEditing(orders.find((item) => item.orderId === id) ?? null)}
         rows={rows.map((item) => [
           <span key="o" className="font-semibold text-slate-900">{item.orderNumber}</span>,
           nameOf(item.customerId),
@@ -90,14 +91,25 @@ export function OrdersView({ orders, customers, settings, query, onChange }: { r
 }
 
 function OrderModal({ initial, customers, count, paymentModes, onClose, onSave }: { readonly initial: Order | null; readonly customers: Customer[]; readonly count: number; readonly paymentModes: string[]; readonly onClose: () => void; readonly onSave: (order: Order) => void }) {
-  // Pre-fill the product/price from the customer's saved details so nothing is re-typed.
-  const customerProduct = (id: string) => {
+  // Pre-fill the product AND price from the customer's saved details so nothing is
+  // re-typed. Price comes from the customer's purchase (the same source auto-generated
+  // orders use); the label falls back to the customer's product fields carried from the lead.
+  const customerDefaults = (id: string): { label: string; price: string } => {
     const c = customers.find((item) => item.customerId === id);
-    return c ? [c.productBrand, c.productModel].filter(Boolean).join(" ").trim() : "";
+    if (!c) return { label: "", price: "" };
+    const purchase = (c.purchases ?? [])[0];
+    const label =
+      [purchase?.productBrand, purchase?.productModel].filter(Boolean).join(" ").trim() ||
+      [c.productBrand, c.productModel].filter(Boolean).join(" ").trim();
+    return { label, price: purchase?.price ? String(purchase.price) : "" };
   };
+  const seed = initial ? { label: "", price: "" } : customerDefaults(customers[0]?.customerId ?? "");
   const [customerId, setCustomerId] = useState(initial?.customerId ?? customers[0]?.customerId ?? "");
-  const [productLabel, setProductLabel] = useState(initial?.productLabel ?? (initial ? "" : customerProduct(customers[0]?.customerId ?? "")));
-  const [amount, setAmount] = useState(typeof initial?.amount === "number" ? String(initial.amount) : "");
+  const [productLabel, setProductLabel] = useState(initial?.productLabel ?? seed.label);
+  const [amount, setAmount] = useState(typeof initial?.amount === "number" ? String(initial.amount) : seed.price);
+  // Remember the last auto-applied values so switching customers refreshes fields the
+  // user hasn't hand-edited, without clobbering anything they typed themselves.
+  const autoRef = useRef(seed);
   const [advancePaid, setAdvancePaid] = useState(typeof initial?.advancePaid === "number" ? String(initial.advancePaid) : "");
   const [paymentMode, setPaymentMode] = useState<PaymentMode | "">(initial?.paymentMode ?? "");
   const [quotationId, setQuotationId] = useState(initial?.quotationId ?? "");
@@ -110,7 +122,12 @@ function OrderModal({ initial, customers, count, paymentModes, onClose, onSave }
 
   function pickCustomer(id: string) {
     setCustomerId(id);
-    if (!initial && !productLabel) setProductLabel(customerProduct(id));
+    if (initial) return;
+    const next = customerDefaults(id);
+    // Replace only fields still holding the previous customer's auto value.
+    setProductLabel((cur) => (cur === autoRef.current.label ? next.label : cur));
+    setAmount((cur) => (cur === autoRef.current.price ? next.price : cur));
+    autoRef.current = next;
   }
 
   function submit() {

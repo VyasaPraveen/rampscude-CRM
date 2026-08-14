@@ -55,6 +55,7 @@ export function PaymentsView({ payments, customers, settings, query, onChange }:
         columns={["Invoice", "Customer", "Amount", "Paid", "Balance", "Status", "Action"]}
         rowIds={rows.map((item) => item.paymentId)}
         onDeleteSelected={removeMany}
+        onRowClick={(id) => setEditing(payments.find((item) => item.paymentId === id) ?? null)}
         rows={rows.map((item) => [
           <span key="i" className="font-semibold text-slate-900">{item.invoiceNumber}</span>,
           nameOf(item.customerId),

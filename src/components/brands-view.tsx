@@ -82,6 +82,7 @@ export function BrandsView({
         columns={["Brand", "GST %", "Remarks", "In Stock", "Status", "Action"]}
         rowIds={rows.map((item) => item.brandId)}
         onDeleteSelected={removeMany}
+        onRowClick={(id) => setEditing(brands.find((item) => item.brandId === id) ?? null)}
         rows={rows.map((item) => [
           <span key="n" className="inline-flex items-center gap-2 font-semibold text-slate-900">
             <Tag className="h-4 w-4 text-blue-600" /> {item.name}

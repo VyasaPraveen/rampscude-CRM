@@ -109,6 +109,7 @@ export function ServicesView({ services, customers, brands, query, onChange }: {
         columns={["Service", "Customer", "Product", "Complaint", "Technician", "Status", "Action"]}
         rowIds={rows.map((item) => item.serviceId)}
         onDeleteSelected={removeMany}
+        onRowClick={(id) => setEditing(services.find((item) => item.serviceId === id) ?? null)}
         rows={rows.map((item) => [
           <span key="s" className="font-semibold text-slate-900">{item.serviceNumber}</span>,
           nameOf(item.customerId),

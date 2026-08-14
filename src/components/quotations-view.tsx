@@ -102,6 +102,7 @@ export function QuotationsView({
         columns={["Quotation", "Reference", "Lead / Customer", "Net", "GST", "Total", "Status", "Actions"]}
         rowIds={rows.map((item) => item.quotationId)}
         onDeleteSelected={onDeleteMany}
+        onRowClick={(id) => { const q = quotations.find((item) => item.quotationId === id); if (q) onEdit(q); }}
         rows={rows.map((item) => [
           item.quotationNumber,
           item.reference || "—",

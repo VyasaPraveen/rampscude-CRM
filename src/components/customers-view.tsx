@@ -101,6 +101,7 @@ export function CustomersView({ customers, query, onEdit, onDelete, onDeleteMany
         columns={["Name", "Phone", "Town", "Product Type", "Brand", "Model", "Balance", "Contact", "Actions"]}
         rowIds={rows.map((item) => item.customerId)}
         onDeleteSelected={onDeleteMany}
+        onRowClick={(id) => { const c = customers.find((item) => item.customerId === id); if (c) onEdit(c); }}
         rows={rows.map((item) => {
           const phone = item.mobile.replace(/\D/g, "");
           const waNumber = (item.whatsapp || item.mobile).replace(/\D/g, "");

@@ -107,6 +107,7 @@ export function UsersView({
         columns={["Name", "Email", "Phone", "Role", "Department", "Status", "Actions"]}
         rowIds={users.map((user) => user.id)}
         onDeleteSelected={removeMany}
+        onRowClick={(id) => { const user = users.find((item) => item.id === id); if (user) setEditing({ ...user, newPassword: "" }); }}
         rows={users.map((user) => [
           <span key="n" className="font-semibold text-slate-900">
             {user.name}
