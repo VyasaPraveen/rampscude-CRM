@@ -10,3 +10,7 @@ out
 # Local CRM data backups — contain customer PII, never commit (repo is public)
 backups/
 *.crm-backup.json
+
+# Unrelated local working files (kept on disk, out of this repo)
+/Veggie Cart - Phase 2 App Requirement Document.md
+/scripts/
