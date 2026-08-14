@@ -1,4 +1,4 @@
-import type { CompanySettings, Customer, Invoice, Lead, Product, Quotation } from "@/types/crm";
+import type { CompanySettings, Customer, Invoice, Lead, Order, Product, Quotation } from "@/types/crm";
 import { productLabel } from "@/types/crm";
 import { gstLabel, inclusiveBreakdown, totalsForQuotation } from "@/lib/gst";
 
@@ -472,6 +472,112 @@ export async function downloadInvoicePdf(invoice: Invoice, settings: CompanySett
   doc.text(`( ${settings.proprietor} )`, valueX, cursor, { align: "right" });
 
   doc.save(`${invoice.invoiceNumber.replace(/[^\w-]+/g, "-")}.pdf`);
+}
+
+/**
+ * Generate and download an A5 order sheet — a compact confirmation the shop can
+ * print and hand over. Shows the product, money split, delivery and payment.
+ */
+export async function downloadOrderPdf(order: Order, customer: Customer | undefined, settings: CompanySettings): Promise<void> {
+  const { jsPDF } = await import("jspdf");
+  const autoTable = (await import("jspdf-autotable")).default;
+
+  const doc = new jsPDF({ unit: "pt", format: "a5" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const marginX = 32;
+  let y = 40;
+
+  // Letterhead (logo if set, else the company name).
+  const logo = await loadImage(settings.logo ?? "");
+  let drewLogo = false;
+  if (logo) {
+    try {
+      const props = doc.getImageProperties(logo);
+      const width = 140;
+      const height = (props.height / props.width) * width;
+      doc.addImage(logo, "PNG", marginX, y - 12, width, height);
+      y += height - 6;
+      drewLogo = true;
+    } catch {
+      // fall back to text
+    }
+  }
+  if (!drewLogo) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(14);
+    doc.setTextColor(17, 24, 39);
+    doc.text(settings.name, marginX, y);
+    y += 14;
+  }
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.setTextColor(100, 116, 139);
+  [
+    [settings.addressLine1, settings.addressLine2].filter(Boolean).join(", "),
+    [settings.city, settings.pincode].filter(Boolean).join(" - "),
+    [settings.phone, settings.altPhone].filter(Boolean).join(" / ")
+  ]
+    .filter(Boolean)
+    .forEach((line) => doc.text(line, marginX, (y += 10)));
+
+  doc.setTextColor(17, 24, 39);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(12);
+  doc.text("ORDER", pageWidth - marginX, 44, { align: "right" });
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.text(order.orderNumber, pageWidth - marginX, 60, { align: "right" });
+  doc.text(formatDate(order.createdAt), pageWidth - marginX, 72, { align: "right" });
+
+  doc.setDrawColor(203, 213, 225);
+  doc.line(marginX, (y += 10), pageWidth - marginX, y);
+
+  // Customer block.
+  y += 16;
+  doc.setFontSize(9);
+  doc.text("Customer:", marginX, y);
+  doc.setFont("helvetica", "bold");
+  doc.text(customer ? customer.companyName || customer.customerName : "—", marginX + 58, y);
+  doc.setFont("helvetica", "normal");
+  if (customer?.city) doc.text(customer.city, marginX + 58, (y += 12));
+  if (customer?.mobile) doc.text(customer.mobile, marginX + 58, (y += 12));
+
+  // Product + money.
+  const amount = order.amount ?? 0;
+  const advance = order.advancePaid ?? 0;
+  const balance = Math.max(0, amount - advance);
+  autoTable(doc, {
+    startY: y + 16,
+    head: [["Product / Model", "Amount", "Advance", "Balance"]],
+    body: [[order.productLabel || order.quotationId || "—", rs(amount), rs(advance), rs(balance)]],
+    styles: { fontSize: 8.5, cellPadding: 5, lineColor: [148, 163, 184], lineWidth: 0.5, textColor: [17, 24, 39] },
+    headStyles: { fillColor: [241, 245, 249], textColor: [17, 24, 39], fontStyle: "bold", halign: "center" },
+    columnStyles: { 1: { halign: "right" }, 2: { halign: "right" }, 3: { halign: "right" } },
+    margin: { left: marginX, right: marginX }
+  });
+
+  let cursor = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 16;
+  doc.setFontSize(9);
+  ([
+    ["Delivery Date", order.deliveryDate ? formatDate(order.deliveryDate) : "—"],
+    ["Payment", order.paymentStatus],
+    ["Payment Mode", order.paymentMode || "—"],
+    ["Order Status", order.status]
+  ] as [string, string][]).forEach(([label, value]) => {
+    doc.setFont("helvetica", "normal");
+    doc.text(`${label}:`, marginX, cursor);
+    doc.setFont("helvetica", "bold");
+    doc.text(value, marginX + 92, cursor);
+    cursor += 14;
+  });
+
+  cursor += 24;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.text(`For ${settings.name}`, pageWidth - marginX, cursor, { align: "right" });
+  doc.text(`( ${settings.proprietor} )`, pageWidth - marginX, cursor + 40, { align: "right" });
+
+  doc.save(`${order.orderNumber.replace(/[^\w-]+/g, "-")}.pdf`);
 }
 
 /** Trigger a client-side CSV download. First row is treated as the header. */

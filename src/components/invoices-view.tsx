@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, Download, FileText, FileUp, Plus, Save, Send, UserPlus } from "lucide-react";
+import { CheckCircle2, Download, FileText, FileUp, Pencil, Plus, Save, Send, UserPlus } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import type { Brand, CompanySettings, Customer, Invoice, PaymentMode, Purchase } from "@/types/crm";
 import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
@@ -166,6 +166,7 @@ export function InvoicesView({
   const toast = useToast();
   const [adding, setAdding] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<Invoice | null>(null);
   const [rangeKey, setRangeKey] = useState<RangeKey>("all");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -189,6 +190,12 @@ export function InvoicesView({
     setAdding(false);
     setCreating(false);
     toast(`Invoice ${invoice.invoiceNumber} added`);
+  }
+
+  function saveEdited(invoice: Invoice) {
+    onChange(invoices.map((item) => (item.invoiceId === invoice.invoiceId ? invoice : item)));
+    setEditing(null);
+    toast(`Invoice ${invoice.invoiceNumber} updated`);
   }
 
   function remove(invoice: Invoice) {
@@ -318,10 +325,16 @@ export function InvoicesView({
           <button key="pdf" onClick={() => pdf(item)} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:border-slate-300">
             <FileText className="h-3.5 w-3.5" /> PDF
           </button>,
-          <DeleteButton key="d" resetKey={item.invoiceId} onDelete={() => remove(item)} />
+          <div key="act" className="flex items-center gap-2">
+            <button onClick={() => setEditing(item)} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-blue-700 hover:border-blue-300">
+              <Pencil className="h-3.5 w-3.5" /> Edit
+            </button>
+            <DeleteButton resetKey={item.invoiceId} onDelete={() => remove(item)} />
+          </div>
         ])}
       />
       {adding && <InvoiceModal onClose={() => setAdding(false)} onSave={addInvoice} nextNumber={nextInvoiceNumber(invoices)} />}
+      {editing && <InvoiceModal initial={editing} onClose={() => setEditing(null)} onSave={saveEdited} nextNumber={editing.invoiceNumber} />}
       {creating && <CreateFromCustomerModal customers={customers} brands={brands} settings={settings} nextNumber={nextInvoiceNumber(invoices)} onClose={() => setCreating(false)} onSave={addInvoice} />}
     </div>
   );
@@ -453,8 +466,15 @@ function CreateFromCustomerModal({
 
 type Draft = { invoiceNumber: string; customerName: string; town: string; date: string; amount: string; gstRate: string };
 
-function InvoiceModal({ onClose, onSave, nextNumber }: { readonly onClose: () => void; readonly onSave: (invoice: Invoice) => void; readonly nextNumber: string }) {
-  const [form, setForm] = useState<Draft>({ invoiceNumber: "", customerName: "", town: "", date: new Date().toISOString().slice(0, 10), amount: "", gstRate: "18" });
+function InvoiceModal({ initial, onClose, onSave, nextNumber }: { readonly initial?: Invoice; readonly onClose: () => void; readonly onSave: (invoice: Invoice) => void; readonly nextNumber: string }) {
+  const [form, setForm] = useState<Draft>({
+    invoiceNumber: initial?.invoiceNumber ?? "",
+    customerName: initial?.customerName ?? "",
+    town: initial?.town ?? "",
+    date: initial?.date ?? new Date().toISOString().slice(0, 10),
+    amount: initial ? String(initial.amount) : "",
+    gstRate: initial?.gstRate != null ? String(initial.gstRate) : "18"
+  });
   const [error, setError] = useState("");
 
   function set<K extends keyof Draft>(key: K, value: Draft[K]) {
@@ -464,22 +484,26 @@ function InvoiceModal({ onClose, onSave, nextNumber }: { readonly onClose: () =>
   function submit() {
     if (form.customerName.trim().length < 2) return setError("Customer name is required.");
     onSave({
-      invoiceId: `INV-${Date.now()}`,
+      // Preserve identity and origin when editing; only the edited fields change.
+      invoiceId: initial?.invoiceId ?? `INV-${Date.now()}`,
       invoiceNumber: form.invoiceNumber.trim() || nextNumber,
       customerName: form.customerName.trim(),
       town: form.town.trim(),
       date: form.date,
       amount: Math.max(0, Number(form.amount) || 0),
-      source: "Manual",
-      created: true,
-      shared: false,
+      source: initial?.source ?? "Manual",
+      created: initial?.created ?? true,
+      shared: initial?.shared ?? false,
+      customerId: initial?.customerId,
+      productLabel: initial?.productLabel,
+      paymentMode: initial?.paymentMode,
       gstRate: Math.min(100, Math.max(0, Number(form.gstRate) || 0)),
-      createdAt: new Date().toISOString()
+      createdAt: initial?.createdAt ?? new Date().toISOString()
     });
   }
 
   return (
-    <Modal title="Add Invoice" size="md" onClose={onClose}>
+    <Modal title={initial ? "Edit Invoice" : "Add Invoice"} size="md" onClose={onClose}>
       <div className="grid gap-4 md:grid-cols-2">
         <Field label="Invoice No" value={form.invoiceNumber} onChange={(v) => set("invoiceNumber", v)} placeholder="auto" />
         <Field label="Customer *" value={form.customerName} onChange={(v) => set("customerName", v)} />

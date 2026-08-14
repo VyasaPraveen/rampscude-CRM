@@ -1,4 +1,4 @@
-import type { Customer, Order, PaymentStatus, Purchase } from "@/types/crm";
+import type { Customer, Order, Payment, PaymentStatus, Purchase } from "@/types/crm";
 
 /** Outstanding balance on a purchase. */
 export function purchaseBalance(purchase: Purchase): number {
@@ -30,14 +30,19 @@ export function purchaseLabel(purchase: Purchase): string {
  */
 export function syncOrdersFromCustomer(customer: Customer, orders: Order[]): Order[] {
   const purchases = customer.purchases ?? [];
-  if (purchases.length === 0) return orders;
+  const validPurchaseIds = new Set(purchases.map((p) => p.purchaseId));
+  // Drop this customer's purchase-linked orders whose purchase was removed; leave
+  // manually created orders (no purchaseId) and other customers' orders alone.
+  const result = orders.filter(
+    (order) => !(order.customerId === customer.customerId && order.purchaseId && !validPurchaseIds.has(order.purchaseId))
+  );
+  if (purchases.length === 0) return result;
 
-  let maxSeq = orders.reduce((max, order) => {
+  let maxSeq = result.reduce((max, order) => {
     const match = /(\d+)\s*$/.exec(order.orderNumber);
     return match ? Math.max(max, Number(match[1])) : max;
   }, 0);
 
-  const result = [...orders];
   purchases.forEach((purchase) => {
     const existing = result.find((order) => order.purchaseId === purchase.purchaseId);
     const next: Order = {
@@ -52,6 +57,48 @@ export function syncOrdersFromCustomer(customer: Customer, orders: Order[]): Ord
       productLabel: purchaseLabel(purchase),
       amount: purchase.price || 0,
       advancePaid: purchase.advancePaid || 0,
+      paymentMode: purchase.paymentMode,
+      createdAt: existing?.createdAt ?? purchase.createdAt
+    };
+    if (existing) result[result.indexOf(existing)] = next;
+    else result.unshift(next);
+  });
+  return result;
+}
+
+/** Stable payment id for a purchase-linked payment. */
+export function purchasePaymentId(purchaseId: string): string {
+  return `PAY-P-${purchaseId}`;
+}
+
+/**
+ * Upsert one Payment per customer purchase so a payment recorded on the customer
+ * also shows in the Payments module (and edits made there flow back — see the
+ * Payments handler). Manually created payments (no purchaseId) are left untouched.
+ */
+export function syncPaymentsFromCustomer(customer: Customer, payments: Payment[]): Payment[] {
+  const purchases = customer.purchases ?? [];
+  const validIds = new Set(purchases.map((p) => purchasePaymentId(p.purchaseId)));
+  // Remove this customer's purchase-linked payments whose purchase was removed.
+  const result = payments.filter(
+    (pay) => !(pay.customerId === customer.customerId && pay.purchaseId && !validIds.has(pay.paymentId))
+  );
+  purchases.forEach((purchase) => {
+    const paymentId = purchasePaymentId(purchase.purchaseId);
+    const existing = result.find((pay) => pay.paymentId === paymentId);
+    const invoiceAmount = purchase.price || 0;
+    const paidAmount = Math.min(invoiceAmount, purchase.advancePaid || 0);
+    const next: Payment = {
+      paymentId,
+      customerId: customer.customerId,
+      invoiceNumber: existing?.invoiceNumber || purchaseLabel(purchase),
+      invoiceAmount,
+      paidAmount,
+      balanceAmount: Math.max(0, invoiceAmount - paidAmount),
+      dueDate: purchase.dueDate || existing?.dueDate || "",
+      status: purchasePaymentStatus(purchase),
+      purchaseId: purchase.purchaseId,
+      productLabel: purchaseLabel(purchase),
       paymentMode: purchase.paymentMode,
       createdAt: existing?.createdAt ?? purchase.createdAt
     };

@@ -2,10 +2,12 @@
 
 import { Pencil, Plus, Save } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { Customer, Payment, PaymentStatus } from "@/types/crm";
+import type { Customer, Payment, PaymentMode, PaymentStatus } from "@/types/crm";
 import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { currency } from "@/utils/format";
+
+const PAYMENT_MODES: PaymentMode[] = ["Cash", "UPI", "Bank Transfer", "Card", "Cheque", "Finance"];
 
 function statusFor(invoiceAmount: number, paidAmount: number): PaymentStatus {
   if (paidAmount >= invoiceAmount && invoiceAmount > 0) return "Paid";
@@ -80,7 +82,10 @@ function PaymentModal({ initial, customers, count, onClose, onSave }: { readonly
   const [invoiceAmount, setInvoiceAmount] = useState(initial ? String(initial.invoiceAmount) : "");
   const [paidAmount, setPaidAmount] = useState(initial ? String(initial.paidAmount) : "");
   const [dueDate, setDueDate] = useState(initial?.dueDate ?? new Date().toISOString().slice(0, 10));
+  const [paymentMode, setPaymentMode] = useState<PaymentMode | "">(initial?.paymentMode ?? "");
   const [error, setError] = useState("");
+  // A payment mirrored from a customer purchase — its product & customer are owned there.
+  const linked = Boolean(initial?.purchaseId);
 
   const { balance, status } = useMemo(() => {
     const inv = Math.max(0, Number(invoiceAmount) || 0);
@@ -102,6 +107,10 @@ function PaymentModal({ initial, customers, count, onClose, onSave }: { readonly
       balanceAmount: inv - paid,
       dueDate,
       status: statusFor(inv, paid),
+      // Preserve the link back to the customer purchase so two-way sync keeps working.
+      purchaseId: initial?.purchaseId,
+      productLabel: initial?.productLabel,
+      paymentMode: paymentMode || undefined,
       createdAt: initial?.createdAt ?? new Date().toISOString()
     });
   }
@@ -109,6 +118,11 @@ function PaymentModal({ initial, customers, count, onClose, onSave }: { readonly
   return (
     <Modal title={initial ? "Update Payment" : "Record Payment"} size="lg" onClose={onClose}>
         <div className="grid gap-4 md:grid-cols-2">
+          {linked && (
+            <p className="md:col-span-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700">
+              Linked to a customer purchase{initial?.productLabel ? ` (${initial.productLabel})` : ""} — changes here update the customer &amp; order automatically.
+            </p>
+          )}
           <label className="text-sm font-semibold text-slate-700 md:col-span-2">
             Customer
             <select value={customerId} onChange={(e) => setCustomerId(e.target.value)} className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2">
@@ -121,6 +135,15 @@ function PaymentModal({ initial, customers, count, onClose, onSave }: { readonly
           <Field label="Due Date" value={dueDate} onChange={setDueDate} type="date" />
           <Field label="Invoice Amount (₹)" value={invoiceAmount} onChange={setInvoiceAmount} type="number" />
           <Field label="Paid Amount (₹)" value={paidAmount} onChange={setPaidAmount} type="number" />
+          <label className="text-sm font-semibold text-slate-700">
+            Payment Mode
+            <select value={paymentMode} onChange={(e) => setPaymentMode(e.target.value as PaymentMode | "")} className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2">
+              <option value="">— Select —</option>
+              {PAYMENT_MODES.map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+          </label>
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">
           <span className="text-slate-500">Balance: <span className="font-bold text-slate-900">{currency(Math.max(0, balance))}</span></span>

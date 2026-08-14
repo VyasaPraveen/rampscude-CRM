@@ -1,6 +1,6 @@
 "use client";
 
-import { Download, FileUp, MessageCircle, Pencil, Phone } from "lucide-react";
+import { Download, FileUp, MessageCircle, Pencil, Phone, Undo2 } from "lucide-react";
 import { useRef } from "react";
 import type { Customer, CustomerSourceType, ProductType } from "@/types/crm";
 import { DataTable, DeleteButton } from "@/components/ui";
@@ -46,7 +46,7 @@ function customersFromCSV(rows: string[][]): Customer[] {
     .filter((c) => c.customerName || c.mobile);
 }
 
-export function CustomersView({ customers, query, onEdit, onDelete, onDeleteMany, onImport }: { customers: Customer[]; query: string; onEdit: (customer: Customer) => void; onDelete: (customer: Customer) => void; onDeleteMany: (ids: string[]) => void; onImport: (rows: Customer[]) => void }) {
+export function CustomersView({ customers, query, onEdit, onDelete, onDeleteMany, onRevert, onImport }: { customers: Customer[]; query: string; onEdit: (customer: Customer) => void; onDelete: (customer: Customer) => void; onDeleteMany: (ids: string[]) => void; onRevert: (customer: Customer) => void; onImport: (rows: Customer[]) => void }) {
   const toast = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -134,6 +134,9 @@ export function CustomersView({ customers, query, onEdit, onDelete, onDeleteMany
             <div key="actions" className="flex items-center gap-2">
               <button onClick={() => onEdit(item)} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-blue-700 hover:border-blue-300">
                 <Pencil className="h-3.5 w-3.5" /> Edit
+              </button>
+              <button onClick={() => onRevert(item)} title="Move this customer back to Leads" className="inline-flex items-center gap-1 rounded-lg border border-amber-200 px-2.5 py-1.5 text-xs font-semibold text-amber-700 hover:border-amber-300">
+                <Undo2 className="h-3.5 w-3.5" /> To Lead
               </button>
               <DeleteButton resetKey={item.customerId} onDelete={() => onDelete(item)} />
             </div>

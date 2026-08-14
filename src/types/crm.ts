@@ -244,6 +244,12 @@ export interface Payment {
   balanceAmount: number;
   dueDate: string;
   status: PaymentStatus;
+  /** Set when this payment mirrors a customer purchase, so the two stay in two-way sync. */
+  purchaseId?: string;
+  /** Product this payment is for (mirrored from the purchase). */
+  productLabel?: string;
+  /** How the money was paid — same field offered on the customer purchase. */
+  paymentMode?: PaymentMode;
   createdAt: string;
 }
 

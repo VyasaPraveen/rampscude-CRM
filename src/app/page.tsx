@@ -44,10 +44,10 @@ import {
   services as serviceSeed,
   users as userSeed
 } from "@/lib/seed-data";
-import type { AttendanceRecord, Brand, CompanySettings, Customer, Invoice, Lead, Order, Payment, Product, Quotation, ServiceRequest, User } from "@/types/crm";
+import type { AttendanceRecord, Brand, CompanySettings, Customer, Invoice, Lead, Order, Payment, Product, Purchase, Quotation, ServiceRequest, User } from "@/types/crm";
 import { cn } from "@/lib/utils";
 import { computeTotals, rateForProduct } from "@/lib/gst";
-import { syncOrdersFromCustomer } from "@/lib/orders";
+import { syncOrdersFromCustomer, syncPaymentsFromCustomer } from "@/lib/orders";
 import { Dashboard } from "@/components/dashboard-view";
 import { useToast } from "@/components/toast";
 
@@ -387,13 +387,15 @@ export default function Page() {
     const next = existed ? customerList.map((item) => (item.customerId === customer.customerId ? customer : item)) : [customer, ...customerList];
     setCustomerList(next);
     store(STORAGE_KEYS.customers, next);
-    // A customer's purchases/payment details are mirrored into Orders so they stay
-    // in sync whenever the customer is added or edited.
-    if ((customer.purchases?.length ?? 0) > 0) {
-      const nextOrders = syncOrdersFromCustomer(customer, orderList);
-      setOrderList(nextOrders);
-      store(STORAGE_KEYS.orders, nextOrders);
-    }
+    // A customer's purchases/payment details are mirrored into Orders and Payments so
+    // they stay in sync whenever the customer is added or edited (and orphaned mirror
+    // records are pruned when a purchase is removed).
+    const nextOrders = syncOrdersFromCustomer(customer, orderList);
+    setOrderList(nextOrders);
+    store(STORAGE_KEYS.orders, nextOrders);
+    const nextPayments = syncPaymentsFromCustomer(customer, paymentList);
+    setPaymentList(nextPayments);
+    store(STORAGE_KEYS.payments, nextPayments);
     setEditingCustomer(null);
     toast(existed ? `${customer.customerName} updated` : `${customer.customerName} added`);
   }
@@ -412,6 +414,51 @@ export default function Page() {
     setCustomerList(next);
     store(STORAGE_KEYS.customers, next);
     toast(`${removed} customer${removed === 1 ? "" : "s"} removed`, "info");
+  }
+
+  /** Undo a conversion: move a customer back into Leads (restoring the original lead
+   *  if there is one, else recreating one from the customer's details). */
+  function revertCustomerToLead(customer: Customer) {
+    const hadLead = leadList.some((l) => l.convertedCustomerId === customer.customerId);
+    const nextLeads: Lead[] = hadLead
+      ? leadList.map((l) => (l.convertedCustomerId === customer.customerId ? { ...l, convertedCustomerId: undefined, status: "Follow-up" as const } : l))
+      : [
+          {
+            leadId: `LEAD-${Date.now()}`,
+            leadNumber: `RC-LEAD-2026-${String(nextNumber(leadList.map((l) => l.leadNumber))).padStart(3, "0")}`,
+            name: customer.customerName,
+            town: customer.city,
+            phone: customer.mobile,
+            source: "Product Enquiry",
+            description: "",
+            status: "Follow-up",
+            address: customer.address,
+            email: customer.email,
+            productBrand: customer.productBrand,
+            productModel: customer.productModel,
+            productType: customer.productType,
+            sourceType: customer.sourceType,
+            createdAt: new Date().toISOString()
+          },
+          ...leadList
+        ];
+    setLeadList(nextLeads);
+    store(STORAGE_KEYS.leads, nextLeads);
+
+    const nextCustomers = customerList.filter((c) => c.customerId !== customer.customerId);
+    setCustomerList(nextCustomers);
+    store(STORAGE_KEYS.customers, nextCustomers);
+
+    // Remove the mirror Orders/Payments this customer's purchases created; leave any
+    // manually-added ones so nothing entered by hand is lost.
+    const nextOrders = orderList.filter((o) => !(o.customerId === customer.customerId && o.purchaseId));
+    setOrderList(nextOrders);
+    store(STORAGE_KEYS.orders, nextOrders);
+    const nextPayments = paymentList.filter((p) => !(p.customerId === customer.customerId && p.purchaseId));
+    setPaymentList(nextPayments);
+    store(STORAGE_KEYS.payments, nextPayments);
+
+    toast(`${customer.customerName} moved back to Leads`, "info");
   }
 
   /** Bulk-add imported customers, skipping any whose phone already exists (no duplicates). */
@@ -573,6 +620,9 @@ export default function Page() {
     let order: Order | undefined;
     if (leadQuotation) {
       const deliveryDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      // Carry the lead's product and quoted price straight onto the order — no re-entry.
+      const productLabel = [lead.productBrand, lead.productModel].filter(Boolean).join(" ").trim();
+      const amount = leadQuotation.total || (typeof lead.quotedPrice === "number" ? lead.quotedPrice : undefined);
       order = {
         orderId: `ORD-${Date.now()}`,
         orderNumber: `RC-ORD-2026-${String(nextNumber(orderList.map((o) => o.orderNumber))).padStart(3, "0")}`,
@@ -581,6 +631,8 @@ export default function Page() {
         deliveryDate,
         paymentStatus: "Pending",
         status: "Processing",
+        productLabel: productLabel || undefined,
+        amount,
         createdAt: new Date().toISOString()
       };
       const nextOrders = [order, ...orderList];
@@ -614,8 +666,47 @@ export default function Page() {
   }
 
   function updatePayments(next: Payment[]) {
+    // Two-way sync: an edit to a purchase-linked payment flows back onto the
+    // customer's purchase, and Orders is re-synced so all three modules agree.
+    let customers = customerList;
+    let orders = orderList;
+    let changed = false;
+    next.forEach((pay) => {
+      if (!pay.purchaseId) return;
+      const owner = customers.find((c) => (c.purchases ?? []).some((p) => p.purchaseId === pay.purchaseId));
+      const purchase = owner?.purchases?.find((p) => p.purchaseId === pay.purchaseId);
+      if (!owner || !purchase) return;
+      const same =
+        (purchase.price || 0) === (pay.invoiceAmount || 0) &&
+        (purchase.advancePaid || 0) === (pay.paidAmount || 0) &&
+        (purchase.dueDate ?? "") === (pay.dueDate ?? "") &&
+        (purchase.paymentMode ?? "") === (pay.paymentMode ?? "");
+      if (same) return;
+      changed = true;
+      const updated: Purchase = {
+        ...purchase,
+        price: pay.invoiceAmount || 0,
+        advancePaid: pay.paidAmount || 0,
+        dueDate: pay.dueDate || undefined,
+        paymentMode: pay.paymentMode
+      };
+      customers = customers.map((c) =>
+        c.customerId === owner.customerId
+          ? { ...c, purchases: (c.purchases ?? []).map((p) => (p.purchaseId === purchase.purchaseId ? updated : p)) }
+          : c
+      );
+    });
     setPaymentList(next);
     store(STORAGE_KEYS.payments, next);
+    if (changed) {
+      setCustomerList(customers);
+      store(STORAGE_KEYS.customers, customers);
+      customers.forEach((c) => {
+        orders = syncOrdersFromCustomer(c, orders);
+      });
+      setOrderList(orders);
+      store(STORAGE_KEYS.orders, orders);
+    }
   }
 
   function saveQuotation(quotation: Quotation) {
@@ -796,7 +887,7 @@ export default function Page() {
           )}
           {activeModule === "dashboard" && <Dashboard customers={customerList} quotations={quotationList} leads={leadList} invoices={invoiceList} payments={paymentList} services={serviceList} />}
           {activeModule === "search" && <SearchView customers={customerList} products={inventory} leads={leadList} />}
-          {activeModule === "customers" && <CustomersView customers={customerList} query={globalSearch} onEdit={(customer) => setEditingCustomer(customer)} onDelete={deleteCustomer} onDeleteMany={deleteCustomers} onImport={importCustomers} />}
+          {activeModule === "customers" && <CustomersView customers={customerList} query={globalSearch} onEdit={(customer) => setEditingCustomer(customer)} onDelete={deleteCustomer} onDeleteMany={deleteCustomers} onRevert={revertCustomerToLead} onImport={importCustomers} />}
           {activeModule === "leads" && (
             <LeadsView leads={leadList} products={inventory} brands={brandList} customFields={settings.leadFields} query={globalSearch} onChange={updateLeads} onConvert={convertLead} onCreate={createQuotationFromLead} />
           )}
@@ -816,7 +907,7 @@ export default function Page() {
               onDeleteMany={deleteQuotations}
             />
           )}
-          {activeModule === "orders" && <OrdersView orders={orderList} customers={customerList} query={globalSearch} onChange={updateOrders} />}
+          {activeModule === "orders" && <OrdersView orders={orderList} customers={customerList} settings={settings} query={globalSearch} onChange={updateOrders} />}
           {activeModule === "invoices" && <InvoicesView invoices={invoiceList} customers={customerList} brands={brandList} settings={settings} query={globalSearch} onChange={updateInvoices} />}
           {activeModule === "services" && <ServicesView services={serviceList} customers={customerList} brands={brandList} query={globalSearch} onChange={updateServices} />}
           {activeModule === "attendance" && <AttendanceView users={userList} records={attendance} onChange={updateAttendance} />}

@@ -168,6 +168,7 @@ type Draft = {
   brochureUrl: string;
   description: string;
   status: LeadStatus;
+  date: string;
 };
 
 function toDraft(lead: Lead | null): Draft {
@@ -185,7 +186,8 @@ function toDraft(lead: Lead | null): Draft {
     quotedPrice: typeof lead?.quotedPrice === "number" ? String(lead.quotedPrice) : "",
     brochureUrl: lead?.brochureUrl ?? "",
     description: lead?.description ?? "",
-    status: lead?.status ?? "New"
+    status: lead?.status ?? "New",
+    date: (lead?.createdAt ?? new Date().toISOString()).slice(0, 10)
   };
 }
 
@@ -241,7 +243,11 @@ function LeadModal({
       status: form.status,
       convertedCustomerId: initial?.convertedCustomerId,
       custom: Object.keys(custom).length ? custom : undefined,
-      createdAt: initial?.createdAt ?? new Date().toISOString()
+      // Editable date: keep the original timestamp when the day is unchanged, else set it.
+      createdAt:
+        initial?.createdAt && initial.createdAt.slice(0, 10) === form.date
+          ? initial.createdAt
+          : new Date(`${form.date || new Date().toISOString().slice(0, 10)}T00:00:00`).toISOString()
     });
   }
 
@@ -299,6 +305,7 @@ function LeadModal({
             </select>
           </label>
           <Field label="Quoted Price (₹, incl. GST)" value={form.quotedPrice} onChange={(v) => set("quotedPrice", v)} type="number" />
+          <Field label="Date" value={form.date} onChange={(v) => set("date", v)} type="date" />
           <Field label="Brochure Link" value={form.brochureUrl} onChange={(v) => set("brochureUrl", v)} />
           <CustomFieldInputs defs={customFields} values={custom} onChange={(id, value) => setCustom((c) => ({ ...c, [id]: value }))} />
           <label className="text-sm font-semibold text-slate-700">

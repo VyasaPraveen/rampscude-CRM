@@ -56,21 +56,23 @@ export function CustomerModal({ initial, products, brands, customFields, onClose
   const brandOptions = uniqueSorted([...brands.filter((b) => b.active).map((b) => b.name), ...products.map((p) => p.brand), initial?.productBrand]);
   const modelOptions = uniqueSorted([...products.map((p) => p.model), initial?.productModel]);
 
-  const [purchases, setPurchases] = useState<Purchase[]>(initial?.purchases ?? []);
+  // A blank payment block, pre-filled with the customer's product so the common case
+  // (one purchase) needs no extra typing.
+  const blankPurchase = (): Purchase => ({
+    purchaseId: `PUR-${Date.now()}-${Math.floor(Math.random() * 1e4)}`,
+    productBrand: initial?.productBrand ?? "",
+    productModel: initial?.productModel ?? "",
+    price: 0,
+    advancePaid: 0,
+    createdAt: new Date().toISOString()
+  });
+
+  // Always show at least one payment block by default (no "Add Purchase" click needed).
+  const [purchases, setPurchases] = useState<Purchase[]>(initial?.purchases?.length ? initial.purchases : [blankPurchase()]);
   const [custom, setCustom] = useState<Record<string, string>>(initial?.custom ?? {});
 
   function addPurchase() {
-    setPurchases((current) => [
-      ...current,
-      {
-        purchaseId: `PUR-${Date.now()}-${current.length}`,
-        productBrand: initial?.productBrand ?? "",
-        productModel: initial?.productModel ?? "",
-        price: 0,
-        advancePaid: 0,
-        createdAt: new Date().toISOString()
-      }
-    ]);
+    setPurchases((current) => [...current, blankPurchase()]);
   }
 
   function updatePurchase(index: number, patch: Partial<Purchase>) {
@@ -78,7 +80,11 @@ export function CustomerModal({ initial, products, brands, customFields, onClose
   }
 
   function removePurchase(index: number) {
-    setPurchases((current) => current.filter((_, i) => i !== index));
+    // Keep one block visible so the payment fields never disappear entirely.
+    setPurchases((current) => {
+      const next = current.filter((_, i) => i !== index);
+      return next.length ? next : [blankPurchase()];
+    });
   }
 
   function submit(values: CustomerForm) {
@@ -174,18 +180,14 @@ export function CustomerModal({ initial, products, brands, customFields, onClose
         <div className="mt-8">
           <div className="mb-2 flex items-center justify-between">
             <div>
-              <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Purchases &amp; Payments</h3>
-              <p className="text-xs text-slate-500">Each purchase creates/updates an Order. Add another line for a repeat purchase — no duplicate customer.</p>
+              <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Payment Details</h3>
+              <p className="text-xs text-slate-500">Kept in sync with the Payments and Orders modules. Add another line only for a repeat purchase — no duplicate customer.</p>
             </div>
             <button type="button" onClick={addPurchase} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-semibold text-blue-700 hover:border-blue-300">
-              <Plus className="h-4 w-4" /> Add Purchase
+              <Plus className="h-4 w-4" /> Add another
             </button>
           </div>
-          {purchases.length === 0 ? (
-            <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
-              No purchases recorded. Add one to track product price, advance and balance.
-            </p>
-          ) : (
+          {(
             <div className="space-y-3">
               {purchases.map((purchase, index) => (
                 <div key={purchase.purchaseId} className="rounded-lg border border-slate-200 p-3">
@@ -203,11 +205,11 @@ export function CustomerModal({ initial, products, brands, customFields, onClose
                       <datalist id={`models-${purchase.purchaseId}`}>{modelOptions.map((m) => <option key={m} value={m} />)}</datalist>
                     </label>
                     <label className="text-xs font-semibold text-slate-600">
-                      Product Price (incl. GST)
+                      Amount (incl. GST)
                       <input type="number" min={0} value={purchase.price || ""} onChange={(e) => updatePurchase(index, { price: Math.max(0, Number(e.target.value) || 0) })} className="mt-1 h-10 w-full rounded-lg border border-slate-200 px-2 text-sm font-normal outline-none ring-blue-500 focus:ring-2" />
                     </label>
                     <label className="text-xs font-semibold text-slate-600">
-                      Advance Paid
+                      Paid Amount
                       <input type="number" min={0} value={purchase.advancePaid || ""} onChange={(e) => updatePurchase(index, { advancePaid: Math.max(0, Number(e.target.value) || 0) })} className="mt-1 h-10 w-full rounded-lg border border-slate-200 px-2 text-sm font-normal outline-none ring-blue-500 focus:ring-2" />
                     </label>
                     <label className="text-xs font-semibold text-slate-600">
