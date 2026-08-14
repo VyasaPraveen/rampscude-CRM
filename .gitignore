@@ -6,3 +6,7 @@ out
 .firebase
 **/.firebase
 *.tsbuildinfo
+
+# Local CRM data backups — contain customer PII, never commit (repo is public)
+backups/
+*.crm-backup.json
