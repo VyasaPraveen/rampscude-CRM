@@ -422,12 +422,21 @@ export default function Page() {
   /** Authenticate against the users list: email must exist, password must match, account must be active. */
   async function handleLogin(values: z.infer<typeof loginSchema>): Promise<{ ok: boolean; error?: string }> {
     const email = values.email.trim().toLowerCase();
-    const match = userList.find((user) => user.email.toLowerCase() === email);
-    if (!match || !(await verifyPassword(match, values.password))) {
-      return { ok: false, error: "Invalid email or password." };
+    // Trim the password the same way user-creation does, so a stray leading/trailing
+    // space typed here never reads as a wrong password.
+    const password = values.password.trim();
+    const match = userList.find((user) => user.email.trim().toLowerCase() === email);
+    // Split the two failure modes: a missing account is usually a typo or a not-yet-
+    // synced staff record, which is far more actionable than a blanket "wrong password".
+    if (!match) {
+      const hint = syncStatus === "live" ? "" : " If this account was just created on another device, wait for the “Synced” indicator and try again.";
+      return { ok: false, error: `No account found for this email.${hint}` };
     }
     if (match.status === "Inactive") {
       return { ok: false, error: "This account is inactive. Contact your administrator." };
+    }
+    if (!(await verifyPassword(match, password))) {
+      return { ok: false, error: "Incorrect password. Please try again." };
     }
     setCurrentUser(match);
     saveState(STORAGE_KEYS.auth, match);
@@ -791,8 +800,80 @@ export default function Page() {
   }
 
   function updateOrders(next: Order[]) {
-    setOrderList(next);
-    store(STORAGE_KEYS.orders, next);
+    // Orders is a first-class money entry point: an order's price/advance is written
+    // onto the customer's purchase so the customer balance and the Payments module
+    // stay in step — the client enters it once in Orders and it reflects everywhere.
+    // An order carrying money that isn't linked to a purchase yet creates one.
+    let customers = customerList;
+    const affected = new Set<string>();
+    let changed = false;
+    const linkedOrders = next.map((order) => {
+      if (!order.customerId) return order;
+      const hasMoney = (order.amount ?? 0) > 0 || (order.advancePaid ?? 0) > 0;
+      if (!order.purchaseId && !hasMoney) return order; // status-only order — nothing to sync
+      const owner = order.purchaseId
+        ? customers.find((c) => (c.purchases ?? []).some((p) => p.purchaseId === order.purchaseId))
+        : undefined;
+      const customer = owner ?? customers.find((c) => c.customerId === order.customerId);
+      if (!customer) return order;
+      const purchaseId = order.purchaseId ?? `PUR-${Date.now()}-${Math.floor(Math.random() * 1e4)}`;
+      const existingPurchase = (customer.purchases ?? []).find((p) => p.purchaseId === purchaseId);
+      const price = Math.max(0, order.amount ?? 0);
+      const advancePaid = Math.min(price, Math.max(0, order.advancePaid ?? 0));
+      const dueDate = order.deliveryDate || existingPurchase?.dueDate || undefined;
+      const paymentMode = order.paymentMode ?? existingPurchase?.paymentMode;
+      const same =
+        existingPurchase &&
+        (existingPurchase.price || 0) === price &&
+        (existingPurchase.advancePaid || 0) === advancePaid &&
+        (existingPurchase.dueDate ?? "") === (dueDate ?? "") &&
+        (existingPurchase.paymentMode ?? "") === (paymentMode ?? "");
+      if (same) return { ...order, purchaseId };
+      changed = true;
+      affected.add(customer.customerId);
+      const merged: Purchase = {
+        ...(existingPurchase ?? { purchaseId, createdAt: order.createdAt ?? new Date().toISOString() }),
+        price,
+        advancePaid,
+        dueDate,
+        paymentMode,
+        // Only stamp the product identity when this order is *creating* the purchase,
+        // so a money-only edit never mangles an existing brand/model on the customer.
+        productModel: existingPurchase ? existingPurchase.productModel : order.productLabel || undefined
+      };
+      customers = customers.map((c) =>
+        c.customerId === customer.customerId
+          ? {
+              ...c,
+              purchases: existingPurchase
+                ? (c.purchases ?? []).map((p) => (p.purchaseId === purchaseId ? merged : p))
+                : [...(c.purchases ?? []), merged]
+            }
+          : c
+      );
+      return { ...order, purchaseId };
+    });
+
+    if (!changed) {
+      setOrderList(next);
+      store(STORAGE_KEYS.orders, next);
+      return;
+    }
+    setCustomerList(customers);
+    store(STORAGE_KEYS.customers, customers);
+    // Re-derive Orders and the payment mirrors from the affected customers so all three
+    // modules are canonical and consistent (idempotent — no oscillation).
+    let orders = linkedOrders;
+    let payments = paymentList;
+    customers.forEach((c) => {
+      if (!affected.has(c.customerId)) return;
+      orders = syncOrdersFromCustomer(c, orders);
+      payments = syncPaymentsFromCustomer(c, payments);
+    });
+    setOrderList(orders);
+    store(STORAGE_KEYS.orders, orders);
+    setPaymentList(payments);
+    store(STORAGE_KEYS.payments, payments);
   }
 
   function updateServices(next: ServiceRequest[]) {
@@ -1106,7 +1187,7 @@ export default function Page() {
               onDeleteMany={deleteQuotations}
             />
           )}
-          {activeModule === "orders" && <OrdersView orders={orderList} customers={customerList} settings={settings} query={globalSearch} onChange={updateOrders} />}
+          {activeModule === "orders" && <OrdersView orders={orderList} customers={customerList} products={inventory} settings={settings} query={globalSearch} onChange={updateOrders} />}
           {activeModule === "invoices" && <InvoicesView invoices={invoiceList} customers={customerList} brands={brandList} settings={settings} query={globalSearch} onChange={updateInvoices} />}
           {activeModule === "services" && <ServicesView services={serviceList} customers={customerList} brands={brandList} query={globalSearch} onChange={updateServices} />}
           {activeModule === "attendance" && <AttendanceView users={userList} records={attendance} onChange={updateAttendance} />}

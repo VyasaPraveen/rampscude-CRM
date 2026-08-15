@@ -1,8 +1,8 @@
 "use client";
 
 import { Pencil, Plus, Printer, Save } from "lucide-react";
-import { useRef, useState } from "react";
-import type { CompanySettings, Customer, Order, OrderStatus, PaymentMode, PaymentStatus } from "@/types/crm";
+import { useMemo, useRef, useState } from "react";
+import type { CompanySettings, Customer, Order, OrderStatus, PaymentMode, PaymentStatus, Product } from "@/types/crm";
 import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { downloadOrderPdf } from "@/lib/export";
@@ -11,10 +11,13 @@ import { currency, shortDate } from "@/utils/format";
 
 const orderBalance = (order: Order) => Math.max(0, (order.amount ?? 0) - (order.advancePaid ?? 0));
 
+/** Sentinel value for the "type it myself" option in the product dropdown. */
+const CUSTOM_PRODUCT = "__custom_product__";
+
 const ORDER_STATUSES: OrderStatus[] = ["Processing", "Ready", "Delivered", "Cancelled"];
 const PAYMENT_STATUSES: PaymentStatus[] = ["Pending", "Partial", "Paid"];
 
-export function OrdersView({ orders, customers, settings, query, onChange }: { readonly orders: Order[]; readonly customers: Customer[]; readonly settings: CompanySettings; readonly query: string; readonly onChange: (orders: Order[]) => void }) {
+export function OrdersView({ orders, customers, products, settings, query, onChange }: { readonly orders: Order[]; readonly customers: Customer[]; readonly products: Product[]; readonly settings: CompanySettings; readonly query: string; readonly onChange: (orders: Order[]) => void }) {
   const toast = useToast();
   const [editing, setEditing] = useState<Order | null | "new">(null);
   const nameOf = (id: string) => {
@@ -85,12 +88,23 @@ export function OrdersView({ orders, customers, settings, query, onChange }: { r
           </div>
         ])}
       />
-      {editing !== null && <OrderModal initial={editing === "new" ? null : editing} customers={customers} count={orders.length} paymentModes={optionList(settings, "paymentModes")} onClose={() => setEditing(null)} onSave={save} />}
+      {editing !== null && <OrderModal initial={editing === "new" ? null : editing} customers={customers} products={products} count={orders.length} paymentModes={optionList(settings, "paymentModes")} onClose={() => setEditing(null)} onSave={save} />}
     </div>
   );
 }
 
-function OrderModal({ initial, customers, count, paymentModes, onClose, onSave }: { readonly initial: Order | null; readonly customers: Customer[]; readonly count: number; readonly paymentModes: string[]; readonly onClose: () => void; readonly onSave: (order: Order) => void }) {
+function OrderModal({ initial, customers, products, count, paymentModes, onClose, onSave }: { readonly initial: Order | null; readonly customers: Customer[]; readonly products: Product[]; readonly count: number; readonly paymentModes: string[]; readonly onClose: () => void; readonly onSave: (order: Order) => void }) {
+  // Inventory-backed product picker: unique "Brand Model" labels with their sale price,
+  // so New Order suggests real stock and can auto-fill the price on an exact match.
+  const catalog = useMemo(() => {
+    const map = new Map<string, number>();
+    products.forEach((p) => {
+      const label = `${p.brand} ${p.model}`.trim();
+      if (label && !map.has(label)) map.set(label, p.price || 0);
+    });
+    return map;
+  }, [products]);
+  const catalogLabels = useMemo(() => [...catalog.keys()].sort((a, b) => a.localeCompare(b)), [catalog]);
   // Pre-fill the product AND price from the customer's saved details so nothing is
   // re-typed. Price comes from the customer's purchase (the same source auto-generated
   // orders use); the label falls back to the customer's product fields carried from the lead.
@@ -110,6 +124,9 @@ function OrderModal({ initial, customers, count, paymentModes, onClose, onSave }
   // Remember the last auto-applied values so switching customers refreshes fields the
   // user hasn't hand-edited, without clobbering anything they typed themselves.
   const autoRef = useRef(seed);
+  // "Other (type manually)" is forced on when the user explicitly picks it; it also
+  // turns on automatically whenever the current label isn't one of the stock items.
+  const [forceCustom, setForceCustom] = useState(false);
   const [advancePaid, setAdvancePaid] = useState(typeof initial?.advancePaid === "number" ? String(initial.advancePaid) : "");
   const [paymentMode, setPaymentMode] = useState<PaymentMode | "">(initial?.paymentMode ?? "");
   const [quotationId, setQuotationId] = useState(initial?.quotationId ?? "");
@@ -119,6 +136,9 @@ function OrderModal({ initial, customers, count, paymentModes, onClose, onSave }
   const [error, setError] = useState("");
   // Money on a purchase-linked order is owned by the customer/payment — edit it there.
   const linked = Boolean(initial?.purchaseId);
+  // Show the free-text box when the user chose "Other", or when the current label is a
+  // one-off that isn't in the stock catalog (so an existing custom order still edits).
+  const showCustomProduct = forceCustom || (productLabel.trim() !== "" && !catalog.has(productLabel.trim()));
 
   function pickCustomer(id: string) {
     setCustomerId(id);
@@ -128,6 +148,17 @@ function OrderModal({ initial, customers, count, paymentModes, onClose, onSave }
     setProductLabel((cur) => (cur === autoRef.current.label ? next.label : cur));
     setAmount((cur) => (cur === autoRef.current.price ? next.price : cur));
     autoRef.current = next;
+  }
+
+  // Choosing a stock item from the catalog fills the price when it is still blank
+  // (or holds an earlier auto value), without ever clobbering a hand-typed price.
+  function pickProduct(label: string) {
+    setProductLabel(label);
+    const price = catalog.get(label.trim());
+    if (price == null) return;
+    const priceText = String(price);
+    setAmount((cur) => (cur === "" || cur === autoRef.current.price ? priceText : cur));
+    autoRef.current = { ...autoRef.current, price: priceText };
   }
 
   function submit() {
@@ -162,7 +193,38 @@ function OrderModal({ initial, customers, count, paymentModes, onClose, onSave }
               ))}
             </select>
           </label>
-          <TextField label="Product / Model" value={productLabel} onChange={setProductLabel} />
+          <label className="text-sm font-semibold text-slate-700">
+            Product / Model
+            {catalogLabels.length > 0 && (
+              <select
+                value={showCustomProduct ? CUSTOM_PRODUCT : productLabel}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  if (value === CUSTOM_PRODUCT) {
+                    setForceCustom(true);
+                  } else {
+                    setForceCustom(false);
+                    pickProduct(value);
+                  }
+                }}
+                className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2"
+              >
+                <option value="">— Select product —</option>
+                {catalogLabels.map((label) => (
+                  <option key={label} value={label}>{label}</option>
+                ))}
+                <option value={CUSTOM_PRODUCT}>✏️ Other (type manually)</option>
+              </select>
+            )}
+            {(showCustomProduct || catalogLabels.length === 0) && (
+              <input
+                value={productLabel}
+                onChange={(event) => setProductLabel(event.target.value)}
+                placeholder="Type the product / model"
+                className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2"
+              />
+            )}
+          </label>
           <TextField label="Price (₹, incl. GST)" value={amount} onChange={setAmount} type="number" />
           <TextField label="Advance Paid (₹)" value={advancePaid} onChange={setAdvancePaid} type="number" />
           <SelectField label="Payment Mode" value={paymentMode} options={["", ...paymentModes]} onChange={(v) => setPaymentMode(v as PaymentMode | "")} />

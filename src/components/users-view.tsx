@@ -54,7 +54,10 @@ export function UsersView({
     const existing = users.find((user) => user.id === draft.id);
     if (!existing && !newPassword.trim()) return "Set a password for the new user.";
 
-    let record = { ...(existing ?? {}), ...fields, id: draft.id ?? `USR-${Date.now()}` } as User;
+    // Store the email already normalized (trimmed + lower-cased) so it always matches
+    // what the login screen compares against — a stray space or capital never locks a
+    // freshly-created account out.
+    let record = { ...(existing ?? {}), ...fields, email, id: draft.id ?? `USR-${Date.now()}` } as User;
     if (newPassword.trim()) record = await withHashedPassword(record, newPassword.trim());
 
     onChange(existing ? users.map((user) => (user.id === record.id ? record : user)) : [record, ...users]);

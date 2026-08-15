@@ -20,6 +20,9 @@ header('Cache-Control: no-store');
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: no-referrer');
 header('X-Frame-Options: DENY');
+// Keep the endpoint same-origin only — no other site may read or embed its responses.
+// (No Access-Control-Allow-Origin is sent, so browsers block all cross-origin reads.)
+header('Cross-Origin-Resource-Policy: same-origin');
 
 // Config lives in the account home, above every web root, so it is never served.
 $configPath = '/home/u852408598/crm-sync-config.php';
@@ -85,7 +88,9 @@ if ($method === 'POST') {
     $body = json_decode(file_get_contents('php://input'), true);
     $key = isset($body['key']) ? (string) $body['key'] : '';
     $payload = $body['payload'] ?? null;
-    if ($key === '' || strlen($key) > 64 || !is_string($payload)) {
+    // Module keys are app-defined slugs; constrain the charset so nothing unexpected is
+    // ever persisted (defense in depth on top of the prepared statement).
+    if ($key === '' || !preg_match('/^[A-Za-z0-9_.:-]{1,64}$/', $key) || !is_string($payload)) {
         http_response_code(400);
         echo json_encode(['error' => 'bad request']);
         exit;
