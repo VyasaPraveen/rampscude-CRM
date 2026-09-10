@@ -1,13 +1,15 @@
 "use client";
 
-import { Pencil, Plus, Save } from "lucide-react";
+import { Download, Pencil, Plus, Printer, Save } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { CompanySettings, Customer, Payment, PaymentMode, PaymentStatus, Purchase } from "@/types/crm";
 import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { optionList } from "@/lib/options";
+import { downloadPaymentReceiptPdf, type PdfMode } from "@/lib/export";
+import { nextDocNumber } from "@/lib/numbering";
 import { purchasePaymentId } from "@/lib/orders";
-import { currency } from "@/utils/format";
+import { currency, todayIso } from "@/utils/format";
 
 function statusFor(invoiceAmount: number, paidAmount: number): PaymentStatus {
   if (paidAmount >= invoiceAmount && invoiceAmount > 0) return "Paid";
@@ -18,6 +20,8 @@ function statusFor(invoiceAmount: number, paidAmount: number): PaymentStatus {
 export function PaymentsView({ payments, customers, settings, query, onChange }: { readonly payments: Payment[]; readonly customers: Customer[]; readonly settings: CompanySettings; readonly query: string; readonly onChange: (payments: Payment[]) => void }) {
   const toast = useToast();
   const [editing, setEditing] = useState<Payment | null | "new">(null);
+  // Set right after a save so the receipt can be offered without hunting for the row.
+  const [justSaved, setJustSaved] = useState<Payment | null>(null);
   const nameOf = (id: string) => {
     const c = customers.find((item) => item.customerId === id);
     return c ? c.companyName || c.customerName : id;
@@ -25,6 +29,18 @@ export function PaymentsView({ payments, customers, settings, query, onChange }:
 
   const rows = payments.filter((item) => `${item.invoiceNumber} ${nameOf(item.customerId)}`.toLowerCase().includes(query.toLowerCase()));
   const outstanding = payments.reduce((sum, item) => sum + item.balanceAmount, 0);
+
+  /** Produce the customer receipt for a payment, as a download or straight to print. */
+  async function receipt(payment: Payment, mode: PdfMode) {
+    try {
+      const result = await downloadPaymentReceiptPdf(payment, customers.find((c) => c.customerId === payment.customerId), settings, mode);
+      if (result === "printed") toast(`Receipt for ${payment.invoiceNumber} sent to print`);
+      else if (result === "print-blocked") toast("Pop-up blocked — the receipt was downloaded instead.", "info");
+      else toast(`Receipt saved for ${payment.invoiceNumber}`);
+    } catch {
+      toast("Could not generate the receipt.", "info");
+    }
+  }
 
   function save(payment: Payment) {
     // The row being edited may change its id (e.g. a general payment re-linked to a
@@ -36,6 +52,8 @@ export function PaymentsView({ payments, customers, settings, query, onChange }:
     onChange([payment, ...rest]);
     setEditing(null);
     toast(existed ? `Payment updated for ${payment.invoiceNumber}` : `Payment recorded for ${payment.invoiceNumber}`);
+    // Offer the receipt straight away — the usual next step after taking money.
+    setJustSaved(payment);
   }
 
   function remove(payment: Payment) {
@@ -73,11 +91,33 @@ export function PaymentsView({ payments, customers, settings, query, onChange }:
             <button onClick={() => setEditing(item)} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-blue-700 hover:border-blue-300">
               <Pencil className="h-3.5 w-3.5" /> Update
             </button>
+            <button onClick={() => void receipt(item, "print")} title="Print the payment receipt" className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:border-slate-300">
+              <Printer className="h-3.5 w-3.5" /> Receipt
+            </button>
             <DeleteButton resetKey={item.paymentId} onDelete={() => remove(item)} />
           </div>
         ])}
       />
-      {editing !== null && <PaymentModal initial={editing === "new" ? null : editing} customers={customers} count={payments.length} paymentModes={optionList(settings, "paymentModes")} onClose={() => setEditing(null)} onSave={save} />}
+      {editing !== null && <PaymentModal initial={editing === "new" ? null : editing} customers={customers} existingNumbers={payments.map((item) => item.invoiceNumber)} paymentModes={optionList(settings, "paymentModes")} onClose={() => setEditing(null)} onSave={save} />}
+      {justSaved && (
+        <Modal title="Payment saved" subtitle={`${justSaved.invoiceNumber} · ${nameOf(justSaved.customerId)}`} size="md" onClose={() => setJustSaved(null)}>
+          <div className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">
+            <Line label="Invoice amount" value={currency(justSaved.invoiceAmount)} />
+            <Line label="Paid" value={currency(justSaved.paidAmount)} />
+            <Line label="Balance" value={currency(justSaved.balanceAmount)} strong />
+          </div>
+          <p className="mt-4 text-sm text-slate-500">Print the receipt for the customer, or save a PDF copy.</p>
+          <div className="mt-6 flex flex-wrap justify-end gap-3">
+            <button type="button" onClick={() => setJustSaved(null)} className="rounded-lg border border-slate-200 px-4 py-2 font-semibold">Done</button>
+            <button type="button" onClick={() => void receipt(justSaved, "save")} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-2 font-semibold text-slate-700 hover:border-slate-300">
+              <Download className="h-4 w-4" /> Save PDF
+            </button>
+            <button type="button" onClick={() => void receipt(justSaved, "print")} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white">
+              <Printer className="h-4 w-4" /> Print Receipt
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -85,7 +125,7 @@ export function PaymentsView({ payments, customers, settings, query, onChange }:
 const NEW_PURCHASE = "__new__";
 const purchaseLabelOf = (p: Purchase) => [p.productBrand, p.productModel].filter(Boolean).join(" ").trim() || "Purchase";
 
-function PaymentModal({ initial, customers, count, paymentModes, onClose, onSave }: { readonly initial: Payment | null; readonly customers: Customer[]; readonly count: number; readonly paymentModes: string[]; readonly onClose: () => void; readonly onSave: (payment: Payment) => void }) {
+function PaymentModal({ initial, customers, existingNumbers, paymentModes, onClose, onSave }: { readonly initial: Payment | null; readonly customers: Customer[]; readonly existingNumbers: string[]; readonly paymentModes: string[]; readonly onClose: () => void; readonly onSave: (payment: Payment) => void }) {
   // A payment mirrored from a customer purchase is bound to that customer & purchase.
   const linked = Boolean(initial?.purchaseId);
   const [customerId, setCustomerId] = useState(initial?.customerId ?? customers[0]?.customerId ?? "");
@@ -98,7 +138,7 @@ function PaymentModal({ initial, customers, count, paymentModes, onClose, onSave
   const [invoiceNumber, setInvoiceNumber] = useState(initial?.invoiceNumber ?? "");
   const [invoiceAmount, setInvoiceAmount] = useState(initial ? String(initial.invoiceAmount) : seedPurchase ? String(seedPurchase.price || 0) : "");
   const [paidAmount, setPaidAmount] = useState(initial ? String(initial.paidAmount) : seedPurchase ? String(seedPurchase.advancePaid || 0) : "");
-  const [dueDate, setDueDate] = useState(initial?.dueDate ?? seedPurchase?.dueDate ?? new Date().toISOString().slice(0, 10));
+  const [dueDate, setDueDate] = useState(initial?.dueDate ?? seedPurchase?.dueDate ?? todayIso());
   const [paymentMode, setPaymentMode] = useState<PaymentMode | "">(initial?.paymentMode ?? seedPurchase?.paymentMode ?? "");
   const [error, setError] = useState("");
 
@@ -116,7 +156,7 @@ function PaymentModal({ initial, customers, count, paymentModes, onClose, onSave
     const p = list.find((x) => x.purchaseId === pid);
     setInvoiceAmount(p ? String(p.price || 0) : "");
     setPaidAmount(p ? String(p.advancePaid || 0) : "");
-    setDueDate(p?.dueDate ?? new Date().toISOString().slice(0, 10));
+    setDueDate(p?.dueDate ?? todayIso());
     setPaymentMode(p?.paymentMode ?? "");
   }
 
@@ -139,7 +179,7 @@ function PaymentModal({ initial, customers, count, paymentModes, onClose, onSave
     onSave({
       paymentId: purchasePaymentId(purchaseId),
       customerId,
-      invoiceNumber: invoiceNumber.trim() || `RC/INV/2026/${String(count + 1).padStart(3, "0")}`,
+      invoiceNumber: invoiceNumber.trim() || nextDocNumber("RC/INV/2026/", existingNumbers),
       invoiceAmount: inv,
       paidAmount: paid,
       balanceAmount: inv - paid,
@@ -208,5 +248,14 @@ function Field({ label, value, onChange, type = "text" }: { readonly label: stri
       {label}
       <input type={type} value={value} onChange={(event) => onChange(event.target.value)} className="mt-2 h-11 w-full rounded-lg border border-slate-200 px-3 font-normal outline-none ring-blue-500 focus:ring-2" />
     </label>
+  );
+}
+
+function Line({ label, value, strong }: { readonly label: string; readonly value: string; readonly strong?: boolean }) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <span className="text-slate-500">{label}</span>
+      <span className={strong ? "font-bold text-slate-900" : "font-semibold text-slate-700"}>{value}</span>
+    </div>
   );
 }

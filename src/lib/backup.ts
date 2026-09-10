@@ -1,5 +1,6 @@
 import { APP_VERSION } from "@/lib/version";
 import { STORAGE_KEYS, loadState, saveState } from "@/lib/storage";
+import { todayIso } from "@/utils/format";
 
 /**
  * Local backup of the whole workspace.
@@ -37,7 +38,7 @@ export interface BackupDocument {
 
 /** Today's calendar day (YYYY-MM-DD), used to know whether a backup ran today. */
 export function backupDayKey(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayIso();
 }
 
 /** Build a backup document from the given per-module data. */
@@ -58,8 +59,14 @@ export function downloadBackup(data: Record<string, unknown>): string {
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = filename;
+  // The anchor must be in the document for Firefox to honour the click, and the
+  // object URL must outlive the click — revoking synchronously can cancel the
+  // download before the browser has started reading the blob.
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
   anchor.click();
-  URL.revokeObjectURL(url);
+  document.body.removeChild(anchor);
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
   return filename;
 }
 

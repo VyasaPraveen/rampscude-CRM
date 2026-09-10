@@ -6,6 +6,8 @@ import type { Brand, Customer, ServiceRequest, ServiceStatus } from "@/types/crm
 import { Badge, DataTable, DeleteButton, Modal, Panel } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { whatsappLink } from "@/lib/export";
+import { nextDocNumber } from "@/lib/numbering";
+import { todayIso } from "@/utils/format";
 
 const STATUSES: ServiceStatus[] = ["Pending", "In Progress", "Completed"];
 
@@ -125,17 +127,17 @@ export function ServicesView({ services, customers, brands, query, onChange }: {
           </div>
         ])}
       />
-      {editing !== null && <ServiceModal initial={editing === "new" ? null : editing} customers={customers} count={services.length} onClose={() => setEditing(null)} onSave={save} />}
+      {editing !== null && <ServiceModal initial={editing === "new" ? null : editing} customers={customers} existingNumbers={services.map((item) => item.serviceNumber)} onClose={() => setEditing(null)} onSave={save} />}
     </div>
   );
 }
 
-function ServiceModal({ initial, customers, count, onClose, onSave }: { readonly initial: ServiceRequest | null; readonly customers: Customer[]; readonly count: number; readonly onClose: () => void; readonly onSave: (service: ServiceRequest) => void }) {
+function ServiceModal({ initial, customers, existingNumbers, onClose, onSave }: { readonly initial: ServiceRequest | null; readonly customers: Customer[]; readonly existingNumbers: string[]; readonly onClose: () => void; readonly onSave: (service: ServiceRequest) => void }) {
   const [customerId, setCustomerId] = useState(initial?.customerId ?? customers[0]?.customerId ?? "");
   const [product, setProduct] = useState(initial?.product ?? "");
   const [complaint, setComplaint] = useState(initial?.complaint ?? "");
   const [assignedTo, setAssignedTo] = useState(initial?.assignedTo ?? "");
-  const [serviceDate, setServiceDate] = useState(initial?.serviceDate ?? new Date().toISOString().slice(0, 10));
+  const [serviceDate, setServiceDate] = useState(initial?.serviceDate ?? todayIso());
   const [remarks, setRemarks] = useState(initial?.remarks ?? "");
   const [status, setStatus] = useState<ServiceStatus>(initial?.status ?? "Pending");
   const [error, setError] = useState("");
@@ -145,7 +147,7 @@ function ServiceModal({ initial, customers, count, onClose, onSave }: { readonly
     if (complaint.trim().length < 2) return setError("Enter the complaint / service required.");
     onSave({
       serviceId: initial?.serviceId ?? `SRV-${Date.now()}`,
-      serviceNumber: initial?.serviceNumber ?? `RC-SRV-2026-${String(count + 1).padStart(3, "0")}`,
+      serviceNumber: initial?.serviceNumber ?? nextDocNumber("RC-SRV-2026-", existingNumbers),
       customerId,
       product: product.trim(),
       complaint: complaint.trim(),

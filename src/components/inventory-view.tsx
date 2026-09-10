@@ -6,7 +6,7 @@ import type { Brand, CompanySettings, Product, ProductType } from "@/types/crm";
 import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { optionList, uniqueSorted } from "@/lib/options";
-import { currency } from "@/utils/format";
+import { currency, todayIso } from "@/utils/format";
 
 /** Inventory: purchased stock units with brand, model, serial, price and purchase invoice. */
 export function InventoryView({
@@ -129,7 +129,7 @@ function toDraft(product: Product | null): Draft {
     nlc: typeof product?.nlc === "number" ? String(product.nlc) : "",
     purchaseFrom: product?.purchaseFrom ?? "",
     invoiceName: product?.invoiceName ?? "",
-    invoiceDate: product?.invoiceDate ?? new Date().toISOString().slice(0, 10),
+    invoiceDate: product?.invoiceDate ?? todayIso(),
     saleDate: product?.saleDate ?? "",
     saleInvoiceNo: product?.saleInvoiceNo ?? "",
     soldToName: product?.soldToName ?? "",

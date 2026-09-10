@@ -7,19 +7,14 @@ import { productLabel } from "@/types/crm";
 import { currency } from "@/utils/format";
 import { Modal } from "@/components/ui";
 import { computeTotals, rateForProduct } from "@/lib/gst";
+import { nextDocNumber } from "@/lib/numbering";
 
 const STATUSES: QuotationStatus[] = ["Draft", "Sent", "Accepted", "Rejected"];
 
 type LineItem = { productId: string; quantity: number; price: number; gstRate?: number; label?: string };
 
 function nextQuotationNumber(existing: Quotation[]): string {
-  // Use the max existing sequence (not the count) so deletions never reuse a number.
-  const seq =
-    existing.reduce((max, q) => {
-      const match = /(\d+)\s*$/.exec(q.quotationNumber);
-      return match ? Math.max(max, Number(match[1])) : max;
-    }, 0) + 1;
-  return `RC/QTN/2026/${String(seq).padStart(3, "0")}`;
+  return nextDocNumber("RC/QTN/2026/", existing.map((q) => q.quotationNumber));
 }
 
 /**

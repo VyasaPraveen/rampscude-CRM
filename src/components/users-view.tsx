@@ -1,12 +1,12 @@
 "use client";
 
-import { Pencil, Save, Trash2, UserPlus } from "lucide-react";
+import { Pencil, Save, UserPlus } from "lucide-react";
 import { useState } from "react";
 import type { CompanySettings, Role, User, UserStatus } from "@/types/crm";
 import { withHashedPassword } from "@/lib/password";
 import { optionList } from "@/lib/options";
-import { shortDate } from "@/utils/format";
-import { Badge, DataTable, Modal } from "@/components/ui";
+import { shortDate, todayIso } from "@/utils/format";
+import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { cn } from "@/lib/utils";
 
@@ -15,7 +15,7 @@ const ROLES: Role[] = ["Admin", "Staff"];
 type Draft = Omit<User, "id" | "password" | "passwordHash" | "passwordSalt"> & { id?: string; newPassword: string };
 
 function emptyDraft(): Draft {
-  return { name: "", email: "", phone: "", role: "Staff", department: "Sales", status: "Active", joinedAt: new Date().toISOString().slice(0, 10), newPassword: "" };
+  return { name: "", email: "", phone: "", role: "Staff", department: "Sales", status: "Active", joinedAt: todayIso(), newPassword: "" };
 }
 
 /**
@@ -136,15 +136,12 @@ export function UsersView({
             >
               {user.status === "Active" ? "Deactivate" : "Activate"}
             </button>
-            <button
-              onClick={() => remove(user)}
+            <DeleteButton
+              resetKey={user.id}
+              onDelete={() => remove(user)}
               disabled={user.id === currentUserId}
-              className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 text-slate-400 hover:text-red-600 disabled:opacity-40"
-              aria-label="Remove user"
               title={user.id === currentUserId ? "You cannot remove your own account" : "Remove user"}
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
+            />
           </div>
         ])}
       />

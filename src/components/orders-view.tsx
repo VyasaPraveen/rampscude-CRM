@@ -6,8 +6,9 @@ import type { CompanySettings, Customer, Order, OrderStatus, PaymentMode, Paymen
 import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { downloadOrderPdf } from "@/lib/export";
+import { nextDocNumber } from "@/lib/numbering";
 import { optionList } from "@/lib/options";
-import { currency, shortDate } from "@/utils/format";
+import { currency, shortDate, todayIso } from "@/utils/format";
 
 const orderBalance = (order: Order) => Math.max(0, (order.amount ?? 0) - (order.advancePaid ?? 0));
 
@@ -88,12 +89,12 @@ export function OrdersView({ orders, customers, products, settings, query, onCha
           </div>
         ])}
       />
-      {editing !== null && <OrderModal initial={editing === "new" ? null : editing} customers={customers} products={products} count={orders.length} paymentModes={optionList(settings, "paymentModes")} onClose={() => setEditing(null)} onSave={save} />}
+      {editing !== null && <OrderModal initial={editing === "new" ? null : editing} customers={customers} products={products} existingNumbers={orders.map((item) => item.orderNumber)} paymentModes={optionList(settings, "paymentModes")} onClose={() => setEditing(null)} onSave={save} />}
     </div>
   );
 }
 
-function OrderModal({ initial, customers, products, count, paymentModes, onClose, onSave }: { readonly initial: Order | null; readonly customers: Customer[]; readonly products: Product[]; readonly count: number; readonly paymentModes: string[]; readonly onClose: () => void; readonly onSave: (order: Order) => void }) {
+function OrderModal({ initial, customers, products, existingNumbers, paymentModes, onClose, onSave }: { readonly initial: Order | null; readonly customers: Customer[]; readonly products: Product[]; readonly existingNumbers: string[]; readonly paymentModes: string[]; readonly onClose: () => void; readonly onSave: (order: Order) => void }) {
   // Inventory-backed product picker: unique "Brand Model" labels with their sale price,
   // so New Order suggests real stock and can auto-fill the price on an exact match.
   const catalog = useMemo(() => {
@@ -130,7 +131,7 @@ function OrderModal({ initial, customers, products, count, paymentModes, onClose
   const [advancePaid, setAdvancePaid] = useState(typeof initial?.advancePaid === "number" ? String(initial.advancePaid) : "");
   const [paymentMode, setPaymentMode] = useState<PaymentMode | "">(initial?.paymentMode ?? "");
   const [quotationId, setQuotationId] = useState(initial?.quotationId ?? "");
-  const [deliveryDate, setDeliveryDate] = useState(initial?.deliveryDate ?? new Date().toISOString().slice(0, 10));
+  const [deliveryDate, setDeliveryDate] = useState(initial?.deliveryDate ?? todayIso());
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>(initial?.paymentStatus ?? "Pending");
   const [status, setStatus] = useState<OrderStatus>(initial?.status ?? "Processing");
   const [error, setError] = useState("");
@@ -167,7 +168,7 @@ function OrderModal({ initial, customers, products, count, paymentModes, onClose
     const adv = Math.min(amt, Math.max(0, Number(advancePaid) || 0));
     onSave({
       orderId: initial?.orderId ?? `ORD-${Date.now()}`,
-      orderNumber: initial?.orderNumber ?? `RC-ORD-2026-${String(count + 1).padStart(3, "0")}`,
+      orderNumber: initial?.orderNumber ?? nextDocNumber("RC-ORD-2026-", existingNumbers),
       quotationId: quotationId.trim(),
       customerId,
       deliveryDate,
@@ -228,7 +229,7 @@ function OrderModal({ initial, customers, products, count, paymentModes, onClose
           <TextField label="Price (₹, incl. GST)" value={amount} onChange={setAmount} type="number" />
           <TextField label="Advance Paid (₹)" value={advancePaid} onChange={setAdvancePaid} type="number" />
           <SelectField label="Payment Mode" value={paymentMode} options={["", ...paymentModes]} onChange={(v) => setPaymentMode(v as PaymentMode | "")} />
-          {linked && <p className="md:col-span-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700">This order mirrors a customer purchase — its price/advance are best edited on the customer or in Payments.</p>}
+          {linked && <p className="md:col-span-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700">This order is linked to the customer&apos;s purchase. Edit the product, price or advance here and the customer&apos;s balance and the Payments entry update to match.</p>}
           <TextField label="Quotation Ref" value={quotationId} onChange={setQuotationId} />
           <TextField label="Delivery Date" value={deliveryDate} onChange={setDeliveryDate} type="date" />
           <SelectField label="Payment Status" value={paymentStatus} options={PAYMENT_STATUSES} onChange={(v) => setPaymentStatus(v as PaymentStatus)} />

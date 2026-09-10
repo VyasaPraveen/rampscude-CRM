@@ -7,21 +7,12 @@ import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { CustomFieldInputs } from "@/components/custom-fields";
 import { whatsappLink } from "@/lib/export";
+import { nextSequence } from "@/lib/numbering";
 import { optionList, uniqueSorted } from "@/lib/options";
-import { currency, shortDate } from "@/utils/format";
+import { currency, shortDate, todayIso } from "@/utils/format";
 import { cn } from "@/lib/utils";
 
 const STATUSES: LeadStatus[] = ["New", "Follow-up", "Quotation Sent", "Order Confirmed", "Closed"];
-
-/** Next lead sequence from the max existing number, so deletions never reuse one. */
-function nextLeadSequence(numbers: string[]): number {
-  return (
-    numbers.reduce((max, value) => {
-      const match = /(\d+)\s*$/.exec(value);
-      return match ? Math.max(max, Number(match[1])) : max;
-    }, 0) + 1
-  );
-}
 
 /** Leads from walk-ins, online and social media. Carries full customer fields so a lead can be converted. */
 export function LeadsView({
@@ -233,7 +224,7 @@ function LeadModal({
     if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) return setError("Enter a valid email or leave it blank.");
     onSave({
       leadId: initial?.leadId ?? `LEAD-${Date.now()}`,
-      leadNumber: initial?.leadNumber ?? `RC-LEAD-2026-${String(nextLeadSequence(existingNumbers)).padStart(3, "0")}`,
+      leadNumber: initial?.leadNumber ?? `RC-LEAD-2026-${String(nextSequence(existingNumbers)).padStart(3, "0")}`,
       name: form.name.trim(),
       town: form.town.trim(),
       phone: form.phone.trim(),
@@ -255,7 +246,7 @@ function LeadModal({
       createdAt:
         initial?.createdAt && initial.createdAt.slice(0, 10) === form.date
           ? initial.createdAt
-          : new Date(`${form.date || new Date().toISOString().slice(0, 10)}T00:00:00`).toISOString()
+          : new Date(`${form.date || todayIso()}T00:00:00`).toISOString()
     });
   }
 

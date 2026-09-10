@@ -1,11 +1,12 @@
 "use client";
 
-import { Download, FileBarChart } from "lucide-react";
-import { useState } from "react";
+import { Download, Eye, FileBarChart, FileSpreadsheet, Printer } from "lucide-react";
+import { useMemo, useState } from "react";
 import type { Brand, CompanySettings, Customer, Invoice, Lead, Order, Payment, Product, Quotation, ServiceRequest } from "@/types/crm";
 import { useToast } from "@/components/toast";
+import { Modal } from "@/components/ui";
 import { uniqueSorted } from "@/lib/options";
-import { downloadCSV } from "@/lib/export";
+import { downloadCSV, downloadReportPdf, type PdfMode } from "@/lib/export";
 import { cn } from "@/lib/utils";
 
 type RangeKey = "all" | "today" | "week" | "month" | "custom";
@@ -40,6 +41,8 @@ export function ReportsView(props: { customers: Customer[]; products: Product[];
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [brandFilter, setBrandFilter] = useState("all");
+  // Report currently open in the on-screen viewer.
+  const [viewing, setViewing] = useState<{ title: string; rows: (string | number)[][]; headerRows: number } | null>(null);
 
   const bounds = rangeBounds(rangeKey, from, to);
   const inR = (d: string) => inRange(d, bounds);
@@ -69,7 +72,7 @@ export function ReportsView(props: { customers: Customer[]; products: Product[];
   const qtyOf = (p: Product) => p.quantity ?? 1;
   const costOf = (p: Product) => p.purchasePrice ?? p.nlc ?? 0;
 
-  const reports: { title: string; description: string; build: () => (string | number)[][] }[] = [
+  const reports: { title: string; description: string; headerRows?: number; build: () => (string | number)[][] }[] = [
     {
       title: "Customer Report",
       description: "All customers with contact, product and customer-type details.",
@@ -117,6 +120,8 @@ export function ReportsView(props: { customers: Customer[]; products: Product[];
     {
       title: "Sales Report (Brand × Month)",
       description: "Brand-wise quantity, amount and profit for every month of the year, with totals and margin.",
+      // Banner row + the two-tier column header above the data.
+      headerRows: 3,
       build: () => {
         const year = new Date().getFullYear();
         const saleMonth = (p: Product) => {
@@ -293,23 +298,68 @@ export function ReportsView(props: { customers: Customer[]; products: Product[];
     },
     {
       title: "Monthly Sales Summary",
-      description: "Quotation count and value by month.",
-      build: () => [
-        ["Month", "Quotations", "Total Value (INR)"],
-        ...monthNames
-          .map((name, month) => {
-            const monthly = quotations.filter((q) => new Date(q.createdAt).getMonth() === month);
-            return [name, monthly.length, monthly.reduce((sum, q) => sum + q.total, 0)] as (string | number)[];
-          })
-          .filter((row) => (row[1] as number) > 0)
-      ]
+      description: "Quotation count and value by month, for the current year.",
+      build: () => {
+        // Month alone would merge every year into the same row.
+        const year = new Date().getFullYear();
+        return [
+          ["Month", "Quotations", "Total Value (INR)"],
+          ...monthNames
+            .map((name, month) => {
+              const monthly = quotations.filter((q) => {
+                const created = new Date(q.createdAt);
+                return !Number.isNaN(created.getTime()) && created.getFullYear() === year && created.getMonth() === month;
+              });
+              return [name, monthly.length, monthly.reduce((sum, q) => sum + q.total, 0)] as (string | number)[];
+            })
+            .filter((row) => (row[1] as number) > 0)
+        ];
+      }
     }
   ];
 
-  function exportReport(report: (typeof reports)[number]) {
-    downloadCSV(`${report.title.replace(/\s+/g, "-")}.csv`, report.build());
+  type Report = (typeof reports)[number];
+
+  /** Human label for the active filters, stamped onto the PDF and shown in the viewer. */
+  const rangeLabel =
+    rangeKey === "custom" ? `${from || "start"} to ${to || "today"}` : RANGE_LABELS[rangeKey];
+
+  function exportReport(report: Report, prebuilt?: (string | number)[][]) {
+    const rows = prebuilt ?? report.build();
+    if (rows.length <= (report.headerRows ?? 1)) {
+      toast(`${report.title} has no data for these filters.`, "info");
+      return;
+    }
+    downloadCSV(`${report.title.replace(/\s+/g, "-")}.csv`, rows);
     toast(`${report.title} exported`);
   }
+
+  /** Save or print the report as a PDF, using the same rows the CSV would contain. */
+  async function pdfReport(report: Report, mode: PdfMode, prebuilt?: (string | number)[][]) {
+    const rows = prebuilt ?? report.build();
+    if (rows.length <= (report.headerRows ?? 1)) {
+      toast(`${report.title} has no data for these filters.`, "info");
+      return;
+    }
+    try {
+      const result = await downloadReportPdf(report.title, rows, settings, { range: rangeLabel, brand: brandFilter, headerRows: report.headerRows }, mode);
+      if (result === "printed") toast(`${report.title} sent to print`);
+      else if (result === "print-blocked") toast("Pop-up blocked — the report was downloaded instead.", "info");
+      else toast(`${report.title} saved as PDF`);
+    } catch {
+      toast("Could not generate the report PDF.", "info");
+    }
+  }
+
+  // Build every report's rows once, and only when the data or the filters actually
+  // change. ReportsView re-renders on any parent state change (typing in the header
+  // search box, for one), and rebuilding 13 reports over the full dataset on every
+  // keystroke is needless work.
+  const built = useMemo(
+    () => reports.map((report) => ({ report, rows: report.build() })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `reports` is rebuilt every render; these are its real inputs.
+    [props.customers, props.products, props.brands, props.quotations, props.leads, props.invoices, props.orders, props.payments, props.services, settings, rangeKey, from, to, brandFilter]
+  );
 
   return (
     <div className="space-y-4">
@@ -348,20 +398,136 @@ export function ReportsView(props: { customers: Customer[]; products: Product[];
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-      {reports.map((report) => (
+      {built.map(({ report, rows }) => {
+        const rowCount = Math.max(0, rows.length - (report.headerRows ?? 1));
+        return (
         <div key={report.title} className="flex flex-col rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
-          <FileBarChart className="mb-4 h-8 w-8 text-blue-600" />
+          <div className="mb-4 flex items-start justify-between">
+            <FileBarChart className="h-8 w-8 text-blue-600" />
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+              {rowCount} {rowCount === 1 ? "row" : "rows"}
+            </span>
+          </div>
           <h3 className="font-bold text-slate-950">{report.title}</h3>
           <p className="mt-2 flex-1 text-sm text-slate-500">{report.description}</p>
           <button
-            onClick={() => exportReport(report)}
+            onClick={() => setViewing({ title: report.title, rows, headerRows: report.headerRows ?? 1 })}
             className="mt-5 inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white"
           >
-            <Download className="h-4 w-4" /> Export CSV
+            <Eye className="h-4 w-4" /> View
           </button>
+          <div className="mt-2 grid grid-cols-3 gap-2">
+            <button
+              onClick={() => exportReport(report, rows)}
+              title="Save as CSV (Excel)"
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-2 py-2 text-xs font-semibold text-slate-700 hover:border-slate-300"
+            >
+              <FileSpreadsheet className="h-3.5 w-3.5" /> CSV
+            </button>
+            <button
+              onClick={() => void pdfReport(report, "save", rows)}
+              title="Save as PDF"
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-2 py-2 text-xs font-semibold text-slate-700 hover:border-slate-300"
+            >
+              <Download className="h-3.5 w-3.5" /> PDF
+            </button>
+            <button
+              onClick={() => void pdfReport(report, "print", rows)}
+              title="Print this report"
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-2 py-2 text-xs font-semibold text-slate-700 hover:border-slate-300"
+            >
+              <Printer className="h-3.5 w-3.5" /> Print
+            </button>
+          </div>
         </div>
-      ))}
+        );
+      })}
       </div>
+
+      {viewing && (
+        <Modal title={viewing.title} subtitle={`${Math.max(0, viewing.rows.length - viewing.headerRows)} rows · ${rangeLabel}${brandFilter !== "all" ? ` · ${brandFilter}` : ""}`} size="xl" onClose={() => setViewing(null)}>
+          <ReportTable rows={viewing.rows} headerRows={viewing.headerRows} />
+          <div className="mt-6 flex flex-wrap justify-end gap-3">
+            <button type="button" onClick={() => setViewing(null)} className="rounded-lg border border-slate-200 px-4 py-2 font-semibold">Close</button>
+            <button
+              type="button"
+              onClick={() => { const r = reports.find((item) => item.title === viewing.title); if (r) exportReport(r, viewing.rows); }}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-2 font-semibold text-slate-700 hover:border-slate-300"
+            >
+              <FileSpreadsheet className="h-4 w-4" /> Save CSV
+            </button>
+            <button
+              type="button"
+              onClick={() => { const r = reports.find((item) => item.title === viewing.title); if (r) void pdfReport(r, "save", viewing.rows); }}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-2 font-semibold text-slate-700 hover:border-slate-300"
+            >
+              <Download className="h-4 w-4" /> Save PDF
+            </button>
+            <button
+              type="button"
+              onClick={() => { const r = reports.find((item) => item.title === viewing.title); if (r) void pdfReport(r, "print", viewing.rows); }}
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white"
+            >
+              <Printer className="h-4 w-4" /> Print
+            </button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/** Read-only preview of a built report. The first `headerRows` rows are the header. */
+function ReportTable({ rows, headerRows = 1 }: { readonly rows: (string | number)[][]; readonly headerRows?: number }) {
+  const depth = Math.max(1, Math.min(headerRows, rows.length));
+  if (rows.length <= depth) {
+    return <p className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">No data for the current filters.</p>;
+  }
+  // Banner / two-tier header rows are narrower than the data, so size the grid by the
+  // widest row — otherwise a wide report collapses to the width of its banner.
+  const columns = Math.max(...rows.map((row) => row.length));
+  const head = rows.slice(0, depth);
+  const body = rows.slice(depth);
+  // Long reports are capped in the viewer; the CSV/PDF always contain everything.
+  const LIMIT = 200;
+  const shown = body.slice(0, LIMIT);
+  const indexes = Array.from({ length: columns }, (_, index) => index);
+  return (
+    <div>
+      <div className="max-h-[60vh] overflow-auto rounded-lg border border-slate-200">
+        <table className="min-w-full divide-y divide-slate-200">
+          <thead className="sticky top-0 bg-slate-50">
+            {head.map((row, rowIndex) => (
+              <tr key={rowIndex}>
+                {indexes.map((index) => (
+                  <th key={index} className="whitespace-nowrap px-3 py-2 text-left text-xs font-bold uppercase tracking-wide text-slate-500">
+                    {String(row[index] ?? "")}
+                  </th>
+                ))}
+              </tr>
+            ))}
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {shown.map((row, rowIndex) => (
+              <tr key={rowIndex} className="hover:bg-blue-50/50">
+                {indexes.map((index) => {
+                  const cell = row[index];
+                  return (
+                    <td key={index} className={cn("whitespace-nowrap px-3 py-2 text-sm text-slate-700", typeof cell === "number" && "text-right tabular-nums")}>
+                      {typeof cell === "number" ? cell.toLocaleString("en-IN") : String(cell ?? "")}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {body.length > LIMIT && (
+        <p className="mt-2 text-xs text-slate-500">
+          Showing the first {LIMIT} of {body.length} rows. Save or print to get the full report.
+        </p>
+      )}
     </div>
   );
 }

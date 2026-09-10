@@ -5,8 +5,9 @@ import { useMemo, useRef, useState } from "react";
 import type { Brand, CompanySettings, Customer, Invoice, Purchase } from "@/types/crm";
 import { Badge, DataTable, DeleteButton, Modal } from "@/components/ui";
 import { useToast } from "@/components/toast";
-import { currency, shortDate } from "@/utils/format";
+import { currency, shortDate, todayIso } from "@/utils/format";
 import { downloadCSV, downloadInvoicePdf } from "@/lib/export";
+import { nextDocNumber } from "@/lib/numbering";
 import { cn } from "@/lib/utils";
 
 /** Format a date, falling back to the raw string for non-ISO values (e.g. Tally "1-Apr-2026"). */
@@ -125,7 +126,7 @@ function fromCSV(rows: string[][], startIndex: number): Invoice[] {
       invoiceNumber,
       customerName: cell(iCustomer) || "—",
       town: cell(iTown),
-      date: cell(iDate) || new Date().toISOString().slice(0, 10),
+      date: cell(iDate) || todayIso(),
       amount: parseAmount(cell(iAmount) || "0"),
       source: "Tally",
       created: true,
@@ -137,12 +138,7 @@ function fromCSV(rows: string[][], startIndex: number): Invoice[] {
 
 /** Next invoice sequence from existing numbers, so deletions never reuse one. */
 function nextInvoiceNumber(invoices: Invoice[]): string {
-  const seq =
-    invoices.reduce((max, inv) => {
-      const match = /(\d+)\s*$/.exec(inv.invoiceNumber);
-      return match ? Math.max(max, Number(match[1])) : max;
-    }, 0) + 1;
-  return `RC/INV/2026/${String(seq).padStart(3, "0")}`;
+  return nextDocNumber("RC/INV/2026/", invoices.map((inv) => inv.invoiceNumber));
 }
 
 /** Invoices — created from a saved customer, imported from Tally, or added manually. */
@@ -374,7 +370,7 @@ function CreateFromCustomerModal({
   const purchases = customer?.purchases ?? [];
   const [purchaseIndex, setPurchaseIndex] = useState(0);
   const [invoiceNumber, setInvoiceNumber] = useState(nextNumber);
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(todayIso());
   const [amount, setAmount] = useState("");
   const [gstRate, setGstRate] = useState(String(settings.gstRate));
   const [error, setError] = useState("");
@@ -470,7 +466,7 @@ function InvoiceModal({ initial, onClose, onSave, nextNumber }: { readonly initi
     invoiceNumber: initial?.invoiceNumber ?? "",
     customerName: initial?.customerName ?? "",
     town: initial?.town ?? "",
-    date: initial?.date ?? new Date().toISOString().slice(0, 10),
+    date: initial?.date ?? todayIso(),
     amount: initial ? String(initial.amount) : "",
     gstRate: initial?.gstRate != null ? String(initial.gstRate) : "18"
   });

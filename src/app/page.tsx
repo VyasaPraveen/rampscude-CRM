@@ -47,7 +47,7 @@ import {
 import type { AttendanceRecord, Brand, CompanySettings, Customer, Invoice, Lead, LicenseRecord, Order, Payment, Product, Purchase, Quotation, ServiceRequest, User } from "@/types/crm";
 import { cn } from "@/lib/utils";
 import { computeTotals, rateForProduct } from "@/lib/gst";
-import { syncOrdersFromCustomer, syncPaymentsFromCustomer } from "@/lib/orders";
+import { purchaseLabel, splitProductLabel, syncOrdersFromCustomer, syncPaymentsFromCustomer } from "@/lib/orders";
 import { evaluateLicense, licenseRecordFromKey, verifyLicenseKey, type LicenseStatus } from "@/lib/license";
 import { LicenseScreen } from "@/components/license-screen";
 import { downloadBackup, ensureDailyLocalBackup, lastManualBackupDay, markManualBackupToday, parseBackup } from "@/lib/backup";
@@ -76,8 +76,10 @@ const QuotationModal = dynamic(() => import("@/components/quotation-modal").then
 const CustomerModal = dynamic(() => import("@/components/customer-modal").then((m) => m.CustomerModal));
 import { STORAGE_KEYS, ensureDataVersion, loadState, saveState } from "@/lib/storage";
 import { upgradeStoredPasswords, verifyPassword } from "@/lib/password";
-import { onSyncStatus, persist, pushDoc, subscribeWorkspace, type SyncStatus } from "@/lib/sync";
+import { isSyncAvailable, onSyncStatus, persist, pushDoc, subscribeWorkspace, type SyncStatus } from "@/lib/sync";
+import { nextSequence as nextNumber } from "@/lib/numbering";
 import { APP_VERSION } from "@/lib/version";
+import { isoDayFromNow, todayIso } from "@/utils/format";
 
 type ModuleId =
   | "dashboard"
@@ -151,17 +153,6 @@ const loginSchema = z.object({
   email: z.string().email("Enter a valid email"),
   password: z.string().min(6, "Use at least 6 characters")
 });
-
-/** Next display sequence from a list of numbered strings — uses the max trailing number,
- *  so deleting a record never reuses an existing human-facing number. */
-function nextNumber(existing: string[]): number {
-  return (
-    existing.reduce((max, value) => {
-      const match = /(\d+)\s*$/.exec(value);
-      return match ? Math.max(max, Number(match[1])) : max;
-    }, 0) + 1
-  );
-}
 
 export default function Page() {
   useServiceWorker();
@@ -295,12 +286,19 @@ export default function Page() {
     // lock screen.
     const cachedLicense = cached[STORAGE_KEYS.license] as LicenseRecord | null;
     if (cachedLicense) resolveLicense(cachedLicense);
+    else if (!isSyncAvailable()) {
+      // With no sync endpoint there is nothing that could deliver a licence, so the
+      // cached verdict is final. Without this the gate sat on "Checking licence…"
+      // until the 12s fallback timer fired — a dead screen on every cold start.
+      licenseResolvedRef.current = true;
+      setLicenseStatus("unlicensed");
+    }
 
     // Automatic daily local backup + reminder. A snapshot is written once a day; if
     // that fails (storage blocked) we warn, otherwise we nudge for an off-device copy.
     const backupResult = ensureDailyLocalBackup(cached);
     if (backupResult === "failed") setBackupNotice("failed");
-    else if (lastManualBackupDay() !== new Date().toISOString().slice(0, 10)) setBackupNotice("reminder");
+    else if (lastManualBackupDay() !== todayIso()) setBackupNotice("reminder");
 
     // Restore the session from the LIVE user record (not the stored snapshot) so a
     // removed, deactivated, or role-changed account cannot linger via localStorage.
@@ -763,7 +761,7 @@ export default function Page() {
     // products or value is noise in the Orders module.
     let order: Order | undefined;
     if (leadQuotation) {
-      const deliveryDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const deliveryDate = isoDayFromNow(7);
       // Carry the lead's product and quoted price straight onto the order — no re-entry.
       const productLabel = [lead.productBrand, lead.productModel].filter(Boolean).join(" ").trim();
       const amount = leadQuotation.total || (typeof lead.quotedPrice === "number" ? lead.quotedPrice : undefined);
@@ -822,8 +820,13 @@ export default function Page() {
       const advancePaid = Math.min(price, Math.max(0, order.advancePaid ?? 0));
       const dueDate = order.deliveryDate || existingPurchase?.dueDate || undefined;
       const paymentMode = order.paymentMode ?? existingPurchase?.paymentMode;
+      // The order edits brand+model as one string, so compare like for like: only a
+      // label the user actually changed should rewrite the purchase's product.
+      const label = (order.productLabel ?? "").trim();
+      const labelChanged = Boolean(existingPurchase) && label !== "" && label !== purchaseLabel(existingPurchase as Purchase);
       const same =
         existingPurchase &&
+        !labelChanged &&
         (existingPurchase.price || 0) === price &&
         (existingPurchase.advancePaid || 0) === advancePaid &&
         (existingPurchase.dueDate ?? "") === (dueDate ?? "") &&
@@ -831,15 +834,20 @@ export default function Page() {
       if (same) return { ...order, purchaseId };
       changed = true;
       affected.add(customer.customerId);
+      // Product identity is written when this order CREATES the purchase, and when the
+      // user edited the label on an existing one. Without the second case the purchase
+      // keeps the old product and the re-sync below silently reverts the user's edit.
+      const product =
+        !existingPurchase || labelChanged
+          ? splitProductLabel(label, brandList.map((brand) => brand.name))
+          : { productBrand: existingPurchase.productBrand, productModel: existingPurchase.productModel };
       const merged: Purchase = {
         ...(existingPurchase ?? { purchaseId, createdAt: order.createdAt ?? new Date().toISOString() }),
         price,
         advancePaid,
         dueDate,
         paymentMode,
-        // Only stamp the product identity when this order is *creating* the purchase,
-        // so a money-only edit never mangles an existing brand/model on the customer.
-        productModel: existingPurchase ? existingPurchase.productModel : order.productLabel || undefined
+        ...product
       };
       customers = customers.map((c) =>
         c.customerId === customer.customerId

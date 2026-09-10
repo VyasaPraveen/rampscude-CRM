@@ -1,4 +1,4 @@
-import type { CompanySettings, Customer, Invoice, Lead, Order, Product, Quotation } from "@/types/crm";
+import type { CompanySettings, Customer, Invoice, Lead, Order, Payment, Product, Quotation } from "@/types/crm";
 import { productLabel } from "@/types/crm";
 import { gstLabel, inclusiveBreakdown, totalsForQuotation } from "@/lib/gst";
 
@@ -598,6 +598,314 @@ export function downloadCSV(filename: string, rows: (string | number)[][]): void
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = filename;
+  // The anchor must be in the document for Firefox to honour the click, and the
+  // object URL must outlive the click — revoking synchronously can cancel the
+  // download before the browser has started reading the blob.
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
   anchor.click();
-  URL.revokeObjectURL(url);
+  document.body.removeChild(anchor);
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+/* ------------------------------------------------------------------ *
+ * Shared document plumbing for the receipt and report PDFs.
+ * The existing quotation / invoice / order builders above are left as
+ * they are — they are in production and lay themselves out by hand.
+ * ------------------------------------------------------------------ */
+
+/** How a generated PDF is delivered. */
+export type PdfMode = "save" | "print";
+
+/** What actually happened, so the caller can tell the user the truth. */
+export type PdfResult = "saved" | "printed" | "print-blocked";
+
+type Pdf = import("jspdf").jsPDF;
+
+/**
+ * Deliver a finished document.
+ *
+ * "print" opens the PDF in a new tab with the browser's print dialog already
+ * armed. Pop-up blockers can veto that, so it falls back to a normal download
+ * and reports which one happened — never claim "sent to printer" when the
+ * browser silently blocked the window.
+ */
+function emitPdf(doc: Pdf, filename: string, mode: PdfMode): PdfResult {
+  if (mode === "print") {
+    doc.autoPrint();
+    const url = doc.output("bloburl") as unknown as string;
+    const win = window.open(url, "_blank");
+    if (win) {
+      // The new tab needs the blob to still exist while it loads and prints, but the
+      // URL must not be held forever — every print would otherwise leak a whole PDF.
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      return "printed";
+    }
+    URL.revokeObjectURL(url);
+    doc.save(filename);          // pop-up blocked — at least give them the file
+    return "print-blocked";
+  }
+  doc.save(filename);
+  return "saved";
+}
+
+/** Safe filename stem from a document title / number. */
+function fileStem(value: string): string {
+  return value.replace(/[^\w-]+/g, "-").replace(/^-+|-+$/g, "") || "document";
+}
+
+/**
+ * Draw the company letterhead (logo or name, address, contact) and the document
+ * title block on the right. Returns the y cursor below the rule.
+ */
+async function drawLetterhead(
+  doc: Pdf,
+  settings: CompanySettings,
+  options: { title: string; reference?: string; date?: string; marginX: number; logoWidth: number; compact?: boolean }
+): Promise<number> {
+  const { title, reference, date, marginX, logoWidth, compact } = options;
+  const pageWidth = doc.internal.pageSize.getWidth();
+  let y = compact ? 40 : 44;
+
+  const logo = await loadImage(settings.logo ?? "");
+  let drewLogo = false;
+  if (logo) {
+    try {
+      const props = doc.getImageProperties(logo);
+      const height = (props.height / props.width) * logoWidth;
+      doc.addImage(logo, "PNG", marginX, y - 12, logoWidth, height);
+      y += height - 6;
+      drewLogo = true;
+    } catch {
+      // Unreadable image — fall through to the text letterhead.
+    }
+  }
+  if (!drewLogo) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(compact ? 14 : 17);
+    doc.setTextColor(17, 24, 39);
+    doc.text(settings.name, marginX, y);
+    y += compact ? 14 : 16;
+  }
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(compact ? 7.5 : 8.5);
+  doc.setTextColor(100, 116, 139);
+  [
+    [settings.addressLine1, settings.addressLine2].filter(Boolean).join(", "),
+    [settings.city, settings.pincode].filter(Boolean).join(" - "),
+    [settings.phone, settings.altPhone].filter(Boolean).join(" / "),
+    settings.gstin ? `GSTIN: ${settings.gstin}` : ""
+  ]
+    .filter(Boolean)
+    .forEach((line) => doc.text(line, marginX, (y += compact ? 10 : 11)));
+
+  doc.setTextColor(17, 24, 39);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(compact ? 12 : 13);
+  doc.text(title, pageWidth - marginX, compact ? 44 : 50, { align: "right" });
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(compact ? 9 : 10);
+  if (reference) doc.text(reference, pageWidth - marginX, compact ? 60 : 68, { align: "right" });
+  if (date) doc.text(date, pageWidth - marginX, compact ? 72 : 82, { align: "right" });
+
+  doc.setDrawColor(203, 213, 225);
+  doc.line(marginX, (y += compact ? 10 : 12), pageWidth - marginX, y);
+  return y;
+}
+
+const ONES = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve",
+  "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+const TENS = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+
+function twoDigits(n: number): string {
+  if (n < 20) return ONES[n];
+  const rest = n % 10;
+  return `${TENS[Math.floor(n / 10)]}${rest ? ` ${ONES[rest]}` : ""}`;
+}
+
+/**
+ * Rupees in words using the Indian numbering system (crore / lakh / thousand),
+ * as expected on an Indian payment receipt. Paise are ignored — every amount in
+ * this CRM is whole rupees.
+ */
+export function amountInWords(value: number): string {
+  const amount = Math.max(0, Math.round(value));
+  if (amount === 0) return "Zero Rupees Only";
+  const parts: string[] = [];
+  const push = (n: number, label: string) => {
+    if (n > 0) parts.push(`${twoDigits(n)} ${label}`);
+  };
+  push(Math.floor(amount / 10000000), "Crore");
+  push(Math.floor((amount % 10000000) / 100000), "Lakh");
+  push(Math.floor((amount % 100000) / 1000), "Thousand");
+  push(Math.floor((amount % 1000) / 100), "Hundred");
+  const last = amount % 100;
+  if (last > 0) parts.push(twoDigits(last));
+  return `${parts.join(" ")} Rupees Only`;
+}
+
+/**
+ * A5 payment receipt — the slip handed to (or sent to) the customer when money
+ * is taken. Shows what the payment was against, the money split, and the running
+ * balance, so the customer can see exactly what is still outstanding.
+ */
+export async function downloadPaymentReceiptPdf(
+  payment: Payment,
+  customer: Customer | undefined,
+  settings: CompanySettings,
+  mode: PdfMode = "save"
+): Promise<PdfResult> {
+  const { jsPDF } = await import("jspdf");
+  const autoTable = (await import("jspdf-autotable")).default;
+
+  const doc = new jsPDF({ unit: "pt", format: "a5" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const marginX = 32;
+
+  let y = await drawLetterhead(doc, settings, {
+    title: "PAYMENT RECEIPT",
+    reference: payment.invoiceNumber,
+    date: formatDate(payment.createdAt),
+    marginX,
+    logoWidth: 140,
+    compact: true
+  });
+
+  // Received-from block.
+  y += 16;
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "normal");
+  doc.text("Received from:", marginX, y);
+  doc.setFont("helvetica", "bold");
+  doc.text(customer ? customer.companyName || customer.customerName : "—", marginX + 74, y);
+  doc.setFont("helvetica", "normal");
+  if (customer?.city) doc.text(customer.city, marginX + 74, (y += 12));
+  if (customer?.mobile) doc.text(customer.mobile, marginX + 74, (y += 12));
+
+  const invoiceAmount = payment.invoiceAmount || 0;
+  const paid = payment.paidAmount || 0;
+  const balance = Math.max(0, payment.balanceAmount ?? invoiceAmount - paid);
+
+  autoTable(doc, {
+    startY: y + 16,
+    head: [["Towards", "Invoice Amount", "Paid", "Balance"]],
+    body: [[payment.productLabel || payment.invoiceNumber || "—", rs(invoiceAmount), rs(paid), rs(balance)]],
+    styles: { fontSize: 8.5, cellPadding: 5, lineColor: [148, 163, 184], lineWidth: 0.5, textColor: [17, 24, 39] },
+    headStyles: { fillColor: [241, 245, 249], textColor: [17, 24, 39], fontStyle: "bold", halign: "center" },
+    columnStyles: { 1: { halign: "right" }, 2: { halign: "right" }, 3: { halign: "right" } },
+    margin: { left: marginX, right: marginX }
+  });
+
+  let cursor = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 16;
+
+  // Amount in words — expected on an Indian receipt.
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "normal");
+  doc.text("Amount in words:", marginX, cursor);
+  doc.setFont("helvetica", "bold");
+  const words = doc.splitTextToSize(amountInWords(paid), pageWidth - marginX * 2 - 92) as string[];
+  words.forEach((line, index) => doc.text(line, marginX + 92, cursor + index * 12));
+  cursor += Math.max(1, words.length) * 12 + 6;
+
+  ([
+    ["Payment Mode", payment.paymentMode || "—"],
+    ["Due Date", payment.dueDate ? formatDate(payment.dueDate) : "—"],
+    ["Status", payment.status]
+  ] as [string, string][]).forEach(([label, value]) => {
+    doc.setFont("helvetica", "normal");
+    doc.text(`${label}:`, marginX, cursor);
+    doc.setFont("helvetica", "bold");
+    doc.text(value, marginX + 92, cursor);
+    cursor += 14;
+  });
+
+  cursor += 20;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(100, 116, 139);
+  doc.text("This is a computer-generated receipt.", marginX, cursor);
+
+  doc.setTextColor(17, 24, 39);
+  doc.setFontSize(9);
+  doc.text(`For ${settings.name}`, pageWidth - marginX, cursor, { align: "right" });
+  doc.text(`( ${settings.proprietor} )`, pageWidth - marginX, cursor + 36, { align: "right" });
+
+  return emitPdf(doc, `receipt-${fileStem(payment.invoiceNumber)}.pdf`, mode);
+}
+
+/**
+ * Generic tabular report PDF. Reports vary wildly in width (the Sales grid is 40+
+ * columns), so the page is landscape and the column widths are left to autoTable,
+ * with the font stepped down as the column count grows. The first row of `rows`
+ * is the header, matching the CSV export exactly — the same numbers either way.
+ */
+export async function downloadReportPdf(
+  title: string,
+  rows: (string | number)[][],
+  settings: CompanySettings,
+  meta: { range?: string; brand?: string; headerRows?: number } = {},
+  mode: PdfMode = "save"
+): Promise<PdfResult> {
+  const { jsPDF } = await import("jspdf");
+  const autoTable = (await import("jspdf-autotable")).default;
+
+  const source = rows.length ? rows : [["No data"]];
+  // Some reports carry a banner plus a two-tier column header (the Brand x Month
+  // sales grid), and those rows are narrower than the data. Size the table by the
+  // WIDEST row and pad the rest, or the whole report collapses to one column.
+  const headerRows = Math.max(1, Math.min(meta.headerRows ?? 1, source.length));
+  const columns = Math.max(...source.map((row) => row.length));
+  const pad = (row: (string | number)[]) => [...row, ...Array(Math.max(0, columns - row.length)).fill("")];
+  const head = source.slice(0, headerRows).map(pad);
+  const body = source.slice(headerRows).map(pad);
+  // Keep wide reports legible instead of letting autoTable shrink to nothing.
+  const format = columns > 12 ? "a3" : "a4";
+  const fontSize = columns > 24 ? 5 : columns > 16 ? 6 : columns > 10 ? 7 : 8;
+
+  const doc = new jsPDF({ unit: "pt", format, orientation: "landscape" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const marginX = 32;
+
+  const y = await drawLetterhead(doc, settings, {
+    title: title.toUpperCase(),
+    reference: meta.range ? `Range: ${meta.range}` : undefined,
+    date: formatDate(new Date().toISOString()),
+    marginX,
+    logoWidth: 150,
+    compact: true
+  });
+
+  if (meta.brand && meta.brand !== "all") {
+    doc.setFontSize(8);
+    doc.setTextColor(100, 116, 139);
+    doc.text(`Brand: ${meta.brand}`, marginX, y + 12);
+    doc.setTextColor(17, 24, 39);
+  }
+
+  autoTable(doc, {
+    startY: y + (meta.brand && meta.brand !== "all" ? 22 : 14),
+    head: head.map((row) => row.map((cell) => String(cell ?? ""))),
+    body: body.map((row) => row.map((cell) => (typeof cell === "number" ? inr(cell) : String(cell ?? "")))),
+    styles: { fontSize, cellPadding: 3, lineColor: [203, 213, 225], lineWidth: 0.4, textColor: [17, 24, 39], overflow: "linebreak" },
+    headStyles: { fillColor: [241, 245, 249], textColor: [17, 24, 39], fontStyle: "bold" },
+    // Right-align any column whose data is numeric, so money lines up.
+    columnStyles: Object.fromEntries(
+      Array.from({ length: columns }, (_, index) => [
+        index,
+        { halign: body.some((row) => typeof row[index] === "number") ? "right" : "left" }
+      ])
+    ),
+    margin: { left: marginX, right: marginX },
+    didDrawPage: () => {
+      const page = doc.getCurrentPageInfo().pageNumber;
+      doc.setFontSize(7);
+      doc.setTextColor(148, 163, 184);
+      doc.text(`${settings.name} · ${title}`, marginX, doc.internal.pageSize.getHeight() - 16);
+      doc.text(`Page ${page}`, pageWidth - marginX, doc.internal.pageSize.getHeight() - 16, { align: "right" });
+      doc.setTextColor(17, 24, 39);
+    }
+  });
+
+  return emitPdf(doc, `${fileStem(title)}.pdf`, mode);
 }

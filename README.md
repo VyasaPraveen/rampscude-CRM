@@ -1,67 +1,127 @@
 # RAMPS CUBE CRM
 
-Modern PWA CRM MVP for RAMPS CUBE commercial refrigeration workflows.
+Modern PWA CRM for RAMPS CUBE commercial refrigeration workflows. Next.js static
+export (no Node server in production) backed by a small self-hosted PHP + MySQL
+sync endpoint.
 
 ## Run Locally
 
 ```bash
-npm.cmd install
-npm.cmd run dev -- -p 3000
+npm install
+npm run dev -- -p 3000
 ```
 
 Open `http://localhost:3000`.
 
-## Firebase Setup
+## Architecture
 
-The Firebase web app config is wired for project `ramps-cube-crm-mvp`. The app includes a Firebase client in `src/firebase/client.ts`, Firestore rules, Storage rules, `.firebaserc`, and `firebase.json`.
+| Piece | Where | Notes |
+| --- | --- | --- |
+| App | `src/` | Next.js 15 App Router, `output: "export"` — builds to static HTML/JS |
+| Sync client | `src/lib/sync.ts` | Polls the endpoint every 8s; last-write-wins per module |
+| Sync endpoint | `server/api.php` | Reads/upserts one JSON row per module in `crm_workspace` |
+| Server config | `server/htaccess.conf` | Security headers, CSP, cache rules, `Authorization` passthrough |
 
-## Deploy
+Data is cached in `localStorage` on each device and mirrored to the server, so
+the app keeps working offline and re-syncs when the endpoint is reachable.
 
-```bash
-npm.cmd run build
-firebase.cmd deploy --only hosting,firestore:rules,storage --project ramps-cube-crm-mvp --non-interactive
-```
+## Configuration
 
-If Firebase Storage has not been initialized in the Firebase Console yet, deploy Hosting and Firestore first:
-
-```bash
-firebase.cmd deploy --only hosting,firestore:rules --project ramps-cube-crm-mvp --non-interactive
-```
-
-## Demo Access
-
-The app ships as a time-limited demo. After the cut-off the whole UI locks behind a **"Demo access expired"** screen (login and dashboard both blocked). **Current window: through 25 July 2026 (IST).**
-
-- **Hard cut-off** — `NEXT_PUBLIC_DEMO_EXPIRES_AT` (absolute ISO 8601) is inlined into the static build and cannot be changed by the client. When set, it is **authoritative for every client**, regardless of when they first opened the app.
-- **Rolling window** — if no hard cut-off is set, the demo lasts 3 days from the device's first launch (tracked in `localStorage`).
-
-The window is re-checked every minute, so an open session locks the moment it lapses without a manual refresh.
-
-**To change the demo end date**, update the deadline and redeploy:
+Copy `.env.example` to `.env.local` and set:
 
 ```bash
-# .env.local  →  set the absolute end date, e.g. end of 25 July 2026 (IST)
-NEXT_PUBLIC_DEMO_EXPIRES_AT=2026-07-25T23:59:59+05:30
-
-npm.cmd run build
-firebase.cmd deploy --only hosting --project ramps-cube-crm-mvp --non-interactive
+NEXT_PUBLIC_SYNC_API_URL=/api.php
+NEXT_PUBLIC_SYNC_TOKEN=<the same long random secret as crm-sync-config.php>
 ```
 
-Demo login: `admin@rampscube.com` / `admin123`. All modules start empty — staff accounts are created from the **Users** module, and every other module is filled in by the client.
+Both values are inlined into the static bundle at build time and are therefore
+readable by anyone who can load the app. The shared token gates the endpoint
+against the open internet — it is **not** a per-user credential. Keep the CRM
+behind a URL you do not publish, and rotate the token if it leaks.
 
-## Current MVP Scope
+### Server side
 
-- Role-aware login (Admin / Staff) with React Hook Form and Zod validation
-- Responsive SaaS dashboard with CRM navigation
-- **Customers** — Name & Phone required; Town/Address, Product Brand & Model, Company, Email, GST optional
-- **Inventory** — brand, model, serial no, price, purchased-from, purchase invoice; add **and edit**
-- **Leads** — walk-in / online / social-media capture with nature of enquiry, interest, description; add **and edit**
-- **Orders / Services** — add and edit (status, delivery, technician, dates)
-- **Payments** — record a payment; balance and Paid/Partial/Pending status auto-computed
-- **Invoices** — mark Created / Shared, add manually, or import a Tally CSV export. **In live production, Tally Sync will be enabled** (auto-sync connector)
-- **Overall Search** — one tab searching customers, inventory and leads by name, town, phone, brand, model
-- **Editable quotations** — line items with auto subtotal/discount/GST/total, one-click PDF + WhatsApp share
-- **User management** (admin only) and **Staff attendance** with a monthly grid
-- Reports export to CSV, real dashboard charts, and save toasts
-- Data persists in the browser (localStorage) across reloads
-- PWA manifest, app icon, and production service worker
+`server/api.php` expects a config file **above the web root** (never served):
+
+```php
+<?php // /home/<account>/crm-sync-config.php
+return [
+  'token'   => '<the same secret as NEXT_PUBLIC_SYNC_TOKEN>',
+  'db_host' => 'localhost',
+  'db_user' => '...',
+  'db_pass' => '...',
+  'db_name' => '...',
+];
+```
+
+The table it reads and writes:
+
+```sql
+CREATE TABLE crm_workspace (
+  module_key VARCHAR(64) NOT NULL PRIMARY KEY,
+  payload    LONGTEXT    NOT NULL,
+  updated_at BIGINT      NOT NULL,
+  INDEX (updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+## Build & Deploy
+
+```bash
+npm run build
+```
+
+This runs `next build` and then `tools/postbuild.mjs`, which copies
+`server/htaccess.conf` → `out/.htaccess` and `server/api.php` → `out/api.php`.
+**`out/` is then the complete docroot** — upload its contents as-is.
+
+Do not upload the bare `next build` output: without `.htaccess` the deployment
+loses its CSP and security headers, its 404 mapping, and the `Authorization`
+header rewrite that cross-device sync depends on.
+
+Bump `APP_VERSION` in `src/lib/version.ts` on each deploy — it is shown in the
+sidebar footer so any device can be checked against the live build at a glance.
+
+## Licensing
+
+The CRM is gated by a signed yearly key (`src/lib/license.ts`). A key encodes its
+own term (`RCUBE-<from>-<until>-<signature>`) and is verified offline against a
+secret baked into the build. Renewal is simply a key with a later end date; the
+app warns for the last 30 days of the term and hard-locks after it.
+
+Because the signing secret ships in the bundle, this deters casual tampering but
+is not strong per-install binding — that would need a licence server.
+
+## First Sign-In
+
+A brand-new workspace ships one bootstrap admin, `admin@rampscube.com` /
+`admin123`, defined in `src/lib/seed-data.ts`. **Change this password from the
+Users module before entering real data.** The plaintext seed is replaced with a
+PBKDF2-SHA256 hash on first load; staff accounts are created from Users.
+
+All other modules start empty.
+
+## Modules
+
+- **Customers** — Name & Phone required; town/address, brand/model, product type,
+  source, and per-purchase payment tracking
+- **Inventory** — brand, model, serial, purchase/sale prices, GST slab, sale status
+- **Leads** — walk-in / online / social capture, auto-draft quotation, convert to customer
+- **Orders / Services** — status, delivery, technician, dates
+- **Payments** — balance and Paid/Partial/Pending computed from the linked purchase
+- **Invoices** — mark Created / Shared, add manually, or import a Tally CSV export
+- **Quotations** — line items with GST-inclusive maths, PDF + WhatsApp share
+- **Overall Search** — one tab across customers, inventory and leads
+- **Users** (admin) and **Attendance** with a monthly grid
+- **Reports** — CSV export and dashboard charts
+- **Backup** — daily local snapshot plus a downloadable off-device JSON backup
+
+Customers, Orders and Payments are kept in two-way sync: money entered in any one
+of them is written onto the customer's purchase and reflected in the other two.
+
+## Checks
+
+```bash
+npm run typecheck
+npm run lint
+```

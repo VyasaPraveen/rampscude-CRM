@@ -11,9 +11,17 @@ export function Dashboard({ customers, quotations, leads, invoices, payments, se
     return c ? c.companyName || c.customerName : customerId;
   };
   const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const thisYear = new Date().getFullYear();
   const monthsToShow = new Date().getMonth() + 1; // Jan through the current month
   const customerMonthLabels = monthNames.slice(0, monthsToShow);
-  const customersByMonth = customerMonthLabels.map((_, month) => customers.filter((item) => new Date(item.createdAt).getMonth() === month).length);
+  // Match the year as well as the month — without it last year's January is counted
+  // into this year's January bar, and the chart quietly inflates every year.
+  const customersByMonth = customerMonthLabels.map((_, month) =>
+    customers.filter((item) => {
+      const created = new Date(item.createdAt);
+      return !Number.isNaN(created.getTime()) && created.getFullYear() === thisYear && created.getMonth() === month;
+    }).length
+  );
   const quotationStatusLabels = ["Draft", "Sent", "Accepted", "Rejected"];
   const quotationsByStatus = quotationStatusLabels.map((status) => quotations.filter((item) => item.status === status).length);
   const stats = [

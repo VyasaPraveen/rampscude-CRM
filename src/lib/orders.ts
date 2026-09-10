@@ -1,4 +1,5 @@
 import type { Customer, Order, Payment, PaymentStatus, Purchase } from "@/types/crm";
+import { maxSequence } from "@/lib/numbering";
 
 /** Outstanding balance on a purchase. */
 export function purchaseBalance(purchase: Purchase): number {
@@ -23,6 +24,28 @@ export function purchaseLabel(purchase: Purchase): string {
 }
 
 /**
+ * Split a free-text product label back into brand + model.
+ *
+ * Orders and Payments edit the product as ONE combined string, but a purchase
+ * stores brand and model separately. Match the longest known brand the label
+ * starts with so "Blue Star BS200" round-trips as brand "Blue Star" / model
+ * "BS200" rather than being torn at the first space. With no brand match the
+ * whole label becomes the model, which `purchaseLabel` renders back verbatim.
+ */
+export function splitProductLabel(label: string, brandNames: string[]): Pick<Purchase, "productBrand" | "productModel"> {
+  const text = label.trim();
+  if (!text) return { productBrand: undefined, productModel: undefined };
+  const lower = text.toLowerCase();
+  const match = brandNames
+    .filter((name) => name && lower.startsWith(name.trim().toLowerCase()))
+    .sort((a, b) => b.length - a.length)[0];
+  if (!match) return { productBrand: undefined, productModel: text };
+  const rest = text.slice(match.trim().length).trim();
+  // A label that is exactly the brand has no model part.
+  return { productBrand: match.trim(), productModel: rest || undefined };
+}
+
+/**
  * Upsert one Order per customer purchase so a customer's payment details always
  * show in Orders, and edits stay in step. An existing purchase-linked order keeps
  * its number, order status and quotation link; the money/payment fields are
@@ -38,10 +61,7 @@ export function syncOrdersFromCustomer(customer: Customer, orders: Order[]): Ord
   );
   if (purchases.length === 0) return result;
 
-  let maxSeq = result.reduce((max, order) => {
-    const match = /(\d+)\s*$/.exec(order.orderNumber);
-    return match ? Math.max(max, Number(match[1])) : max;
-  }, 0);
+  let maxSeq = maxSequence(result.map((order) => order.orderNumber));
 
   purchases.forEach((purchase) => {
     const existing = result.find((order) => order.purchaseId === purchase.purchaseId);
