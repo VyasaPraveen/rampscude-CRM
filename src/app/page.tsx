@@ -1185,7 +1185,7 @@ export default function Page() {
           )}
           {activeModule === "dashboard" && <Dashboard customers={customerList} quotations={quotationList} leads={leadList} invoices={invoiceList} payments={paymentList} services={serviceList} />}
           {activeModule === "search" && <SearchView customers={customerList} products={inventory} leads={leadList} />}
-          {activeModule === "customers" && <CustomersView customers={customerList} query={globalSearch} onEdit={(customer) => setEditingCustomer(customer)} onDelete={deleteCustomer} onDeleteMany={deleteCustomers} onRevert={revertCustomerToLead} onImport={importCustomers} />}
+          {activeModule === "customers" && <CustomersView customers={customerList} settings={settings} query={globalSearch} onEdit={(customer) => setEditingCustomer(customer)} onDelete={deleteCustomer} onDeleteMany={deleteCustomers} onRevert={revertCustomerToLead} onImport={importCustomers} />}
           {activeModule === "leads" && (
             <LeadsView leads={leadList} products={inventory} brands={brandList} settings={settings} customFields={settings.leadFields} query={globalSearch} onChange={updateLeads} onConvert={convertLead} onCreate={createQuotationFromLead} />
           )}

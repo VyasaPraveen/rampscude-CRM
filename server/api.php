@@ -64,6 +64,76 @@ if ($mysqli->connect_errno) {
 }
 $mysqli->set_charset('utf8mb4');
 
+/**
+ * Opportunistic daily snapshot.
+ *
+ * This host has no cron, and the workspace's only other copy is whatever an admin
+ * remembers to download. A bulk delete on one device syncs everywhere, so without a
+ * server-side history there is no way back. The app polls this endpoint constantly
+ * while anyone is working, so the first authenticated call each day writes a snapshot
+ * and prunes old ones.
+ *
+ * Written in the app's own backup format, so a snapshot can be restored straight
+ * through Settings > Restore without any conversion.
+ *
+ * Never allowed to affect the response: the sync API must keep working even if the
+ * filesystem is full or read-only.
+ */
+function maybe_daily_snapshot(mysqli $db, array $cfg): void {
+    try {
+        $dir = isset($cfg['backup_dir']) ? $cfg['backup_dir'] : '/home/u852408598/crm-backups';
+        $auto = $dir . '/auto';
+        if (!is_dir($auto) && !@mkdir($auto, 0700, true) && !is_dir($auto)) return;
+
+        $keep = isset($cfg['backup_keep_days']) ? (int) $cfg['backup_keep_days'] : 30;
+        $today = date('Y-m-d');
+        $target = $auto . '/' . $today . '.json';
+
+        // Atomic claim: whichever concurrent request creates the file does the work,
+        // the rest see EEXIST and skip. No lock file, no race.
+        $handle = @fopen($target, 'xb');
+        if ($handle === false) return;
+
+        $modules = array();
+        $res = $db->query('SELECT module_key, payload FROM crm_workspace');
+        if ($res) {
+            while ($row = $res->fetch_assoc()) {
+                $decoded = json_decode($row['payload'], true);
+                // Keep the raw string if it will not decode, rather than dropping the module.
+                $modules[$row['module_key']] = $decoded === null ? $row['payload'] : $decoded;
+            }
+            $res->free();
+        }
+
+        if (count($modules) === 0) {
+            // Nothing to snapshot - do not leave a zero-byte file claiming today is done.
+            fclose($handle);
+            @unlink($target);
+            return;
+        }
+
+        $doc = array(
+            'app'        => 'Ramps Cube CRM',
+            'version'    => 'server-auto',
+            'exportedAt' => date('c'),
+            'modules'    => $modules,
+        );
+        fwrite($handle, json_encode($doc, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        fclose($handle);
+        @chmod($target, 0600);
+
+        // Prune anything past the retention window.
+        $cutoff = time() - ($keep * 86400);
+        foreach ((array) glob($auto . '/*.json') as $file) {
+            if (@filemtime($file) < $cutoff) @unlink($file);
+        }
+    } catch (Throwable $e) {
+        // Backups are best-effort; the sync API must not fail because of them.
+    }
+}
+
+maybe_daily_snapshot($mysqli, $cfg);
+
 $method = $_SERVER['REQUEST_METHOD'];
 $now = (int) round(microtime(true) * 1000);
 

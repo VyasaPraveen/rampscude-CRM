@@ -1,12 +1,12 @@
 "use client";
 
-import { Download, FileUp, MessageCircle, Pencil, Phone, Undo2 } from "lucide-react";
+import { Download, FileText, FileUp, MessageCircle, Pencil, Phone, Undo2 } from "lucide-react";
 import { useRef } from "react";
-import type { Customer, CustomerSourceType, ProductType } from "@/types/crm";
+import type { CompanySettings, Customer, CustomerSourceType, ProductType } from "@/types/crm";
 import { DataTable, DeleteButton } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { cn } from "@/lib/utils";
-import { downloadCSV, whatsappLink } from "@/lib/export";
+import { downloadCSV, downloadCustomerStatementPdf, statementMessage, whatsappLink } from "@/lib/export";
 import { customerBalance } from "@/lib/orders";
 import { parseCSV, pickColumn } from "@/lib/csv";
 import { currency } from "@/utils/format";
@@ -46,8 +46,20 @@ function customersFromCSV(rows: string[][]): Customer[] {
     .filter((c) => c.customerName || c.mobile);
 }
 
-export function CustomersView({ customers, query, onEdit, onDelete, onDeleteMany, onRevert, onImport }: { customers: Customer[]; query: string; onEdit: (customer: Customer) => void; onDelete: (customer: Customer) => void; onDeleteMany: (ids: string[]) => void; onRevert: (customer: Customer) => void; onImport: (rows: Customer[]) => void }) {
+export function CustomersView({ customers, settings, query, onEdit, onDelete, onDeleteMany, onRevert, onImport }: { customers: Customer[]; settings: CompanySettings; query: string; onEdit: (customer: Customer) => void; onDelete: (customer: Customer) => void; onDeleteMany: (ids: string[]) => void; onRevert: (customer: Customer) => void; onImport: (rows: Customer[]) => void }) {
   const toast = useToast();
+
+  /** Print or save the customer's full account statement. */
+  async function statement(customer: Customer) {
+    try {
+      const result = await downloadCustomerStatementPdf(customer, settings, "print");
+      if (result === "printed") toast(`Statement for ${customer.customerName} sent to print`);
+      else if (result === "print-blocked") toast("Pop-up blocked — the statement was downloaded instead.", "info");
+      else toast(`Statement saved for ${customer.customerName}`);
+    } catch {
+      toast("Could not generate the statement.", "info");
+    }
+  }
   const fileRef = useRef<HTMLInputElement>(null);
 
   async function importFile(file: File) {
@@ -123,7 +135,7 @@ export function CustomersView({ customers, query, onEdit, onDelete, onDeleteMany
                 <Phone className="h-3.5 w-3.5" /> Call
               </a>
               <a
-                href={waNumber ? whatsappLink(waNumber, `Hello ${item.customerName}, `) : undefined}
+                href={waNumber ? whatsappLink(waNumber, balance > 0 ? statementMessage(item, settings) : `Hello ${item.customerName}, `) : undefined}
                 target="_blank"
                 rel="noopener noreferrer"
                 className={cn("inline-flex items-center gap-1 rounded-lg border border-green-200 px-2.5 py-1.5 text-xs font-semibold text-green-700 hover:border-green-300", !waNumber && "pointer-events-none opacity-40")}
@@ -135,6 +147,9 @@ export function CustomersView({ customers, query, onEdit, onDelete, onDeleteMany
             <div key="actions" className="flex items-center gap-2">
               <button onClick={() => onEdit(item)} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-blue-700 hover:border-blue-300">
                 <Pencil className="h-3.5 w-3.5" /> Edit
+              </button>
+              <button onClick={() => void statement(item)} title="Print the customer's account statement" className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:border-slate-300">
+                <FileText className="h-3.5 w-3.5" /> Statement
               </button>
               <button onClick={() => onRevert(item)} title="Move this customer back to Leads" className="inline-flex items-center gap-1 rounded-lg border border-amber-200 px-2.5 py-1.5 text-xs font-semibold text-amber-700 hover:border-amber-300">
                 <Undo2 className="h-3.5 w-3.5" /> To Lead

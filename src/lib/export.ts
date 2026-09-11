@@ -1,6 +1,7 @@
 import type { CompanySettings, Customer, Invoice, Lead, Order, Payment, Product, Quotation } from "@/types/crm";
 import { productLabel } from "@/types/crm";
 import { gstLabel, inclusiveBreakdown, totalsForQuotation } from "@/lib/gst";
+import { purchaseLabel } from "@/lib/orders";
 
 /** Rupee formatting for PDF output — jsPDF's core fonts lack the ₹ glyph, so use plain digits. */
 function inr(value: number): string {
@@ -908,4 +909,144 @@ export async function downloadReportPdf(
   });
 
   return emitPdf(doc, `${fileStem(title)}.pdf`, mode);
+}
+
+/**
+ * A4 customer statement — the customer's whole account on one page: every purchase,
+ * what was paid against it, and the balance still outstanding.
+ *
+ * Receipts cover a single payment; this is what you hand (or send) someone when they
+ * ask "what do I still owe you?", and what the shop uses when chasing a balance.
+ */
+export async function downloadCustomerStatementPdf(
+  customer: Customer,
+  settings: CompanySettings,
+  mode: PdfMode = "save"
+): Promise<PdfResult> {
+  const { jsPDF } = await import("jspdf");
+  const autoTable = (await import("jspdf-autotable")).default;
+
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const marginX = 40;
+
+  let y = await drawLetterhead(doc, settings, {
+    title: "STATEMENT OF ACCOUNT",
+    reference: customer.customerName,
+    date: formatDate(new Date().toISOString()),
+    marginX,
+    logoWidth: 190
+  });
+
+  // Who the statement is for.
+  y += 18;
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "normal");
+  doc.text("Statement for:", marginX, y);
+  doc.setFont("helvetica", "bold");
+  doc.text(customer.companyName || customer.customerName || "-", marginX + 78, y);
+  doc.setFont("helvetica", "normal");
+  [customer.address, customer.city, customer.mobile].filter(Boolean).forEach((line) => {
+    doc.text(String(line), marginX + 78, (y += 13));
+  });
+
+  const purchases = customer.purchases ?? [];
+  const totals = purchases.reduce(
+    (acc, p) => {
+      acc.price += p.price || 0;
+      acc.paid += Math.min(p.price || 0, p.advancePaid || 0);
+      return acc;
+    },
+    { price: 0, paid: 0 }
+  );
+  const outstanding = Math.max(0, totals.price - totals.paid);
+
+  autoTable(doc, {
+    startY: y + 18,
+    head: [["#", "Product", "Date", "Amount", "Paid", "Balance", "Mode"]],
+    body: purchases.length
+      ? purchases.map((p, index) => {
+          const amount = p.price || 0;
+          const paid = Math.min(amount, p.advancePaid || 0);
+          return [
+            String(index + 1),
+            purchaseLabel(p),
+            p.advanceDate ? formatDate(p.advanceDate) : p.createdAt ? formatDate(p.createdAt) : "-",
+            rs(amount),
+            rs(paid),
+            rs(Math.max(0, amount - paid)),
+            p.paymentMode || "-"
+          ];
+        })
+      : [["", "No purchases recorded", "", "", "", "", ""]],
+    foot: purchases.length ? [["", "TOTAL", "", rs(totals.price), rs(totals.paid), rs(outstanding), ""]] : undefined,
+    styles: { fontSize: 9, cellPadding: 6, lineColor: [148, 163, 184], lineWidth: 0.5, textColor: [17, 24, 39] },
+    headStyles: { fillColor: [241, 245, 249], textColor: [17, 24, 39], fontStyle: "bold" },
+    footStyles: { fillColor: [241, 245, 249], textColor: [17, 24, 39], fontStyle: "bold" },
+    columnStyles: { 0: { halign: "center", cellWidth: 26 }, 3: { halign: "right" }, 4: { halign: "right" }, 5: { halign: "right" } },
+    margin: { left: marginX, right: marginX }
+  });
+
+  let cursor = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 22;
+
+  // The number the customer actually cares about.
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  doc.text(outstanding > 0 ? "Balance Outstanding:" : "Account Settled:", marginX, cursor);
+  doc.setFontSize(13);
+  doc.text(rs(outstanding), pageWidth - marginX, cursor, { align: "right" });
+
+  if (outstanding > 0) {
+    cursor += 16;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8.5);
+    doc.setTextColor(100, 116, 139);
+    const words = doc.splitTextToSize(`In words: ${amountInWords(outstanding)}`, pageWidth - marginX * 2) as string[];
+    words.forEach((line) => doc.text(line, marginX, (cursor += 11)));
+    doc.setTextColor(17, 24, 39);
+  }
+
+  cursor += 30;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(100, 116, 139);
+  doc.text("This is a computer-generated statement.", marginX, cursor);
+  doc.setTextColor(17, 24, 39);
+  doc.setFontSize(9);
+  doc.text(`For ${settings.name}`, pageWidth - marginX, cursor, { align: "right" });
+  doc.text(`( ${settings.proprietor} )`, pageWidth - marginX, cursor + 40, { align: "right" });
+
+  return emitPdf(doc, `statement-${fileStem(customer.customerName || customer.customerId)}.pdf`, mode);
+}
+
+/** Plain-text account summary for WhatsApp — the same figures as the statement PDF. */
+export function statementMessage(customer: Customer, settings: CompanySettings): string {
+  const purchases = customer.purchases ?? [];
+  const totals = purchases.reduce(
+    (acc, p) => {
+      acc.price += p.price || 0;
+      acc.paid += Math.min(p.price || 0, p.advancePaid || 0);
+      return acc;
+    },
+    { price: 0, paid: 0 }
+  );
+  const outstanding = Math.max(0, totals.price - totals.paid);
+  return [
+    `*${settings.name}* — Account Statement`,
+    `${customer.companyName || customer.customerName}`,
+    "",
+    ...purchases.map((p) => {
+      const amount = p.price || 0;
+      const paid = Math.min(amount, p.advancePaid || 0);
+      return `• ${purchaseLabel(p)} — ₹${inr(amount)} paid ₹${inr(paid)}, balance ₹${inr(Math.max(0, amount - paid))}`;
+    }),
+    purchases.length ? "" : "No purchases recorded.",
+    `Total: ₹${inr(totals.price)}`,
+    `Paid: ₹${inr(totals.paid)}`,
+    outstanding > 0 ? `*Balance due: ₹${inr(outstanding)}*` : "*Account settled — thank you.*",
+    "",
+    settings.phone ? `For any query: ${settings.phone}` : ""
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
 }
