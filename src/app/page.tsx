@@ -8,6 +8,7 @@ import {
   ChevronRight,
   ClipboardList,
   CreditCard,
+  Download,
   FileBarChart,
   FileText,
   Home,
@@ -50,6 +51,7 @@ import { computeTotals, rateForProduct } from "@/lib/gst";
 import { purchaseLabel, splitProductLabel, syncOrdersFromCustomer, syncPaymentsFromCustomer } from "@/lib/orders";
 import { evaluateLicense, licenseRecordFromKey, verifyLicenseKey, type LicenseStatus } from "@/lib/license";
 import { LicenseScreen } from "@/components/license-screen";
+import { Modal } from "@/components/ui";
 import { downloadBackup, ensureDailyLocalBackup, lastManualBackupDay, markManualBackupToday, parseBackup } from "@/lib/backup";
 import { Dashboard } from "@/components/dashboard-view";
 import { useToast } from "@/components/toast";
@@ -187,6 +189,10 @@ export default function Page() {
   // Daily-backup nudge: "failed" = today's local snapshot could not be written;
   // "reminder" = no off-device copy downloaded today; null = nothing to show.
   const [backupNotice, setBackupNotice] = useState<"failed" | "reminder" | null>(null);
+  // The daily backup prompt is a modal, not just the inline strip: an off-device copy
+  // is the only thing standing between a lost laptop and lost customer data, so it has
+  // to interrupt once a day rather than sit in the corner being scrolled past.
+  const [backupPromptOpen, setBackupPromptOpen] = useState(false);
   // Tracks leads currently being converted, to make convert idempotent against double-clicks.
   const convertingRef = useRef<Set<string>>(new Set());
   const [editingCustomer, setEditingCustomer] = useState<Customer | null | "new">(null);
@@ -299,6 +305,9 @@ export default function Page() {
     const backupResult = ensureDailyLocalBackup(cached);
     if (backupResult === "failed") setBackupNotice("failed");
     else if (lastManualBackupDay() !== todayIso()) setBackupNotice("reminder");
+    // Open the prompt for either case. It renders only once someone is signed in, so
+    // it never covers the licence or login screen.
+    if (backupResult === "failed" || lastManualBackupDay() !== todayIso()) setBackupPromptOpen(true);
 
     // Restore the session from the LIVE user record (not the stored snapshot) so a
     // removed, deactivated, or role-changed account cannot linger via localStorage.
@@ -491,6 +500,7 @@ export default function Page() {
     const name = downloadBackup(snapshotData());
     markManualBackupToday();
     setBackupNotice(null);
+    setBackupPromptOpen(false);
     toast(`Backup downloaded: ${name}`);
   }
 
@@ -1205,6 +1215,50 @@ export default function Page() {
           {activeModule === "settings" && <SettingsView settings={settings} users={userList} onChange={updateSettings} onBackup={downloadBackupNow} onRestore={restoreBackup} lastManualBackup={lastManualBackupDay() || undefined} licenseUntil={license?.validUntil} />}
         </section>
       </div>
+
+      {backupPromptOpen && backupNotice && (
+        <Modal
+          title={backupNotice === "failed" ? "Backup not saved on this device" : "Daily backup"}
+          subtitle={new Date().toLocaleDateString("en-IN", { weekday: "long", day: "2-digit", month: "short", year: "numeric" })}
+          size="md"
+          onClose={() => setBackupPromptOpen(false)}
+        >
+          <div className={cn("rounded-lg border px-4 py-3 text-sm", backupNotice === "failed" ? "border-red-300 bg-red-50 text-red-800" : "border-amber-300 bg-amber-50 text-amber-900")}>
+            {backupNotice === "failed"
+              ? "This device could not write its automatic local backup — browser storage is full or blocked. Please download a backup now so today's work is not the only copy."
+              : "No backup has been downloaded today. Keeping a copy off this device protects your customers, orders and payments if the device is lost or the browser data is cleared."}
+          </div>
+          <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <dt className="text-xs font-medium text-slate-500">Customers</dt>
+              <dd className="text-lg font-bold text-slate-900">{customerList.length}</dd>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <dt className="text-xs font-medium text-slate-500">Orders</dt>
+              <dd className="text-lg font-bold text-slate-900">{orderList.length}</dd>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <dt className="text-xs font-medium text-slate-500">Payments</dt>
+              <dd className="text-lg font-bold text-slate-900">{paymentList.length}</dd>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <dt className="text-xs font-medium text-slate-500">Last download</dt>
+              <dd className="text-sm font-bold text-slate-900">{lastManualBackupDay() || "Never"}</dd>
+            </div>
+          </dl>
+          <p className="mt-3 text-xs text-slate-500">
+            The file is saved to this device&apos;s Downloads folder. Keep it somewhere safe — it can be restored from Settings.
+          </p>
+          <div className="mt-6 flex flex-wrap justify-end gap-3">
+            <button type="button" onClick={() => setBackupPromptOpen(false)} className="rounded-lg border border-slate-200 px-4 py-2 font-semibold text-slate-600">
+              Remind me later
+            </button>
+            <button type="button" onClick={downloadBackupNow} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white">
+              <Download className="h-4 w-4" /> Download backup
+            </button>
+          </div>
+        </Modal>
+      )}
 
       {editingCustomer !== null && (
         <CustomerModal initial={editingCustomer === "new" ? null : editingCustomer} products={inventory} brands={brandList} settings={settings} customFields={settings.customerFields} onClose={() => setEditingCustomer(null)} onSave={saveCustomer} />
